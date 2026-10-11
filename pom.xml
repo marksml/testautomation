@@ -12,12 +12,17 @@
     </parent>
 
     <groupId>ch.mmar.testautomation</groupId>
-    <artifactId>testautomation-service</artifactId>
+    <artifactId>testautomation-parent</artifactId>
     <version>0.1.0-SNAPSHOT</version>
-    <packaging>jar</packaging>
+    <packaging>pom</packaging>
 
-    <name>testautomation-service</name>
-    <description>Spring Boot service that distributes test case execution to test agents</description>
+    <name>testautomation</name>
+    <description>Test case execution distribution: service (REST API) and agent (worker)</description>
+
+    <modules>
+        <module>service</module>
+        <module>agent</module>
+    </modules>
 
     <properties>
         <java.version>21</java.version>
@@ -25,26 +30,4 @@
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
     </properties>
 
-    <dependencies>
-        <!-- Core only: no web layer, no persistence yet. -->
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-test</artifactId>
-            <scope>test</scope>
-        </dependency>
-    </dependencies>
-
-    <build>
-        <plugins>
-            <plugin>
-                <groupId>org.springframework.boot</groupId>
-                <artifactId>spring-boot-maven-plugin</artifactId>
-            </plugin>
-        </plugins>
-    </build>
 </project>

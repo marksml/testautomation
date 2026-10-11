@@ -1,4 +1,4 @@
-package ch.mmar.testautomation;
+package ch.mmar.testautomation.service;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;

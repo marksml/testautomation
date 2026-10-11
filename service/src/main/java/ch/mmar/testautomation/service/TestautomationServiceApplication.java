@@ -1,4 +1,4 @@
-package ch.mmar.testautomation;
+package ch.mmar.testautomation.service;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;

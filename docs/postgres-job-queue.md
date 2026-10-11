@@ -186,7 +186,66 @@ or accept pure polling. `max_client_conn` defaults to 100, `default_pool_size` t
 6. Whether `LISTEN/NOTIFY` is worth it at all at this scale — with one service instance and a
    2–5 s poll, polling alone may be entirely sufficient.
 
-## 8. References
+## 8. Idle periods: how agents learn about new work quickly
+
+Two separate problems, easy to conflate:
+
+1. **Transport** — how an idle agent waits for work.
+2. **Database cost while idle** — what the service does with its connections when nothing arrives
+   for hours.
+
+### 8.1 Transport options
+
+| Transport | Latency | Cost / caveats |
+|---|---|---|
+| Short poll (`POST /jobs/claim`, interval 5–30 s) | up to one interval | simplest; cost scales with `agents × frequency` (20 agents / 5 s = 4 req/s, fine; 500 agents without backoff = 100 req/s, not fine) |
+| **HTTP long poll** (`POST /jobs/claim?wait=25s`) | milliseconds | request stays open until a job is available (200 + job) or the wait expires (204); agent re-issues immediately. `DeferredResult` + virtual threads (Java 21) remove the thread-per-waiter problem: with `spring.threads.virtual.enabled=true` each parked request costs a virtual thread and `server.tomcat.threads.max` (default 200) no longer caps the fleet |
+| SSE (`text/event-stream`) | milliseconds | server→agent stream, avoids request overhead, but the actual job still needs a claim call → two mechanisms racing. Only worth it if you also want live log/status streaming |
+| WebSocket / gRPC streaming | milliseconds | the right answer when the channel must be bidirectional anyway (streaming test output); overkill for pure work distribution |
+
+Rules that keep long polling healthy:
+
+- Wait time **< every idle timeout on the path** (reverse proxy, load balancer, NAT): 25–30 s is the
+  usual sweet spot below the ~60 s defaults.
+- Set the timeout explicitly — Spring Boot's `spring.mvc.async.request-timeout` has no default;
+  "the default timeout value for async requests depends on the underlying Servlet container".
+- On `204`, the agent re-issues immediately (optionally with 0–500 ms jitter). On disconnect,
+  reconnect immediately — a dropped long poll is not an error.
+- Return hints in the 204 (e.g. `nextPollAfterMs`) so the server can slow the fleet down
+  (thundering herd after a large batch) without client-side config changes.
+
+### 8.2 What the service does with the database while idle
+
+- **Never wait inside a database connection or transaction.** The pool is ~10 connections and the
+  agent fleet may be 50: a worker that holds a transaction while waiting burns the pool and blocks
+  vacuum. Waiting happens in application memory.
+- **One queue poller per service instance, not per agent.** Park the waiting `DeferredResult`s in an
+  in-memory structure, have a single poller (≈1 query/second while waiters exist) claim jobs and
+  hand them to waiters FIFO. With zero waiting agents the poller can stop entirely, so *idle time
+  costs no queries at all* — the cost scales with waiting agents, not with how long the queue was
+  empty.
+- **`LISTEN/NOTIFY` as an optional latency upgrade.** One dedicated connection per service instance
+  (`NOTIFY jobs_ready` from the enqueue transaction, delivered on commit) wakes the poller instead
+  of it polling. Caveats already covered in §4 and §5: session-bound, not persistent (notifications
+  can be missed on reconnect), and broken by PgBouncer transaction pooling — so keep polling as the
+  fallback.
+- **The reaper keeps running regardless of traffic** (lease expiry, agent registration TTL,
+  housekeeping — every 30–60 s). That is the only guaranteed idle-time query, and it is cheap.
+- A claim query against an empty queue with the partial index from §1 is an index scan returning
+  zero rows — negligible.
+
+### 8.3 Idle-specific failure modes
+
+- **Connections die while idle**: NAT/firewall/load balancers drop idle TCP sessions, so the first
+  job after hours hits a stale connection. HikariCP already pings idle connections
+  (`keepaliveTime` default 2 min) and recycles them (`maxLifetime` default 30 min) — keep
+  `maxLifetime` shorter than any infrastructure-imposed limit.
+- **Idle sessions holding locks**: `idle_in_transaction_session_timeout` is disabled by default (0)
+  in PostgreSQL. Set it (e.g. 60 s) so a forgotten transaction cannot hold locks and stall vacuum.
+- **Idle-time liveness**: heartbeat/health endpoints must keep answering while the queue is empty,
+  otherwise the instance is removed from the load balancer exactly when work arrives.
+
+## 9. References
 
 **PostgreSQL (official)**
 - `SELECT` — locking clause / `SKIP LOCKED`: https://www.postgresql.org/docs/current/sql-select.html#SQL-FOR-UPDATE-SHARE
@@ -205,6 +264,11 @@ or accept pure polling. `max_client_conn` defaults to 100, `default_pool_size` t
 - Matthews Wong, *A Reliable Job Queue in PostgreSQL with SKIP LOCKED*: https://www.matthewswong.com/en/blog/postgres-skip-locked-job-queue/
 - Netdata Academy, *Using FOR UPDATE SKIP LOCKED For Queue Workflows*: https://www.netdata.cloud/academy/update-skip-locked/
 - Terri S. Linenbach, *Why FOR UPDATE SKIP LOCKED Isn't Enough: pg_advisory_xact_lock* (global concurrency limits, duplicate-active-job prevention): https://terrislinenbach.medium.com/why-for-update-skip-locked-isnt-enough-using-pg-advisory-xact-lock-to-build-a-correct-postgresql-d3eb9db46473
+
+**Spring (official)**
+- Spring Framework — *Asynchronous Requests* (`DeferredResult`, async timeouts, SSE): https://docs.spring.io/spring-framework/reference/web/webmvc/mvc-ann-async.html
+- Spring Boot — *Common Application Properties* (`spring.mvc.async.request-timeout`, `spring.threads.virtual.enabled`, `server.tomcat.threads.max`, `server.tomcat.max-connections`): https://docs.spring.io/spring-boot/appendix/application-properties/index.html
+- Baeldung — *Long Polling in Spring MVC*: https://www.baeldung.com/spring-mvc-long-polling
 
 **Libraries / implementations**
 - PGMQ (Postgres Message Queue, Tembo): https://pgmq.github.io/pgmq/ — repository: https://github.com/pgmq/pgmq

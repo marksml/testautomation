@@ -15,11 +15,37 @@
     <name>testautomation-service</name>
     <description>Spring Boot service that distributes test case execution to test agents</description>
 
+    <properties>
+        <!-- Spring Boot's BOM does not manage swagger-core (that is springdoc's job) and the
+             generated API interfaces are annotated with io.swagger.v3.oas.annotations.*.
+             Version derived from: openapi-generator 7.19.0 / swagger-core 2.2.x line. -->
+        <swagger-annotations-jakarta.version>2.2.55</swagger-annotations-jakarta.version>
+        <openapi-generator.version>7.19.0</openapi-generator.version>
+    </properties>
+
     <dependencies>
-        <!-- Core only: no web layer, no persistence yet. -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter</artifactId>
+        </dependency>
+
+        <!-- REST layer: the generated @RestController classes are picked up by component scan. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!-- Bean validation for the generated @Valid request bodies and path variables. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <!-- Annotations used by the generated api/ and model/ sources (io.swagger.v3.oas.annotations). -->
+        <dependency>
+            <groupId>io.swagger.core.v3</groupId>
+            <artifactId>swagger-annotations-jakarta</artifactId>
+            <version>${swagger-annotations-jakarta.version}</version>
         </dependency>
 
         <dependency>
@@ -31,6 +57,66 @@
 
     <build>
         <plugins>
+            <!--
+                Generates the REST layer from openapi/testautomation-service.yaml.
+
+                Output goes to target/generated-sources/openapi (added to the compile source root
+                by the plugin) — nothing is written into src/main/java, so hand-written code,
+                above all the *ApiDelegate implementations, can never be overwritten by a build.
+
+                delegatePattern=true produces, per tag in the spec:
+                  api/<Tag>Api.java          interface: paths, @RequestMapping, @Validated, delegates
+                  api/<Tag>ApiController.java @RestController wiring the delegate bean (generated)
+                  api/<Tag>ApiDelegate.java   interface to implement by hand in src/main/java
+            -->
+            <plugin>
+                <groupId>org.openapitools</groupId>
+                <artifactId>openapi-generator-maven-plugin</artifactId>
+                <version>${openapi-generator.version}</version>
+                <executions>
+                    <execution>
+                        <id>generate-service-api</id>
+                        <goals>
+                            <goal>generate</goal>
+                        </goals>
+                        <configuration>
+                            <inputSpec>${project.basedir}/../openapi/testautomation-service.yaml</inputSpec>
+                            <generatorName>spring</generatorName>
+                            <output>${project.build.directory}/generated-sources/openapi</output>
+                            <!-- Keeps the generator's sample application (extra main class,
+                                 application.properties) out of the output; see the file itself. -->
+                            <ignoreFileOverride>${project.basedir}/../openapi/.openapi-generator-ignore</ignoreFileOverride>
+                            <apiPackage>ch.mmar.testautomation.service.api</apiPackage>
+                            <modelPackage>ch.mmar.testautomation.service.model</modelPackage>
+                            <invokerPackage>ch.mmar.testautomation.service.invoker</invokerPackage>
+                            <generateApiTests>false</generateApiTests>
+                            <generateModelTests>false</generateModelTests>
+                            <generateApiDocumentation>false</generateApiDocumentation>
+                            <generateModelDocumentation>false</generateModelDocumentation>
+                            <configOptions>
+                                <!-- Hand-written delegates instead of generated @RestController bodies. -->
+                                <delegatePattern>true</delegatePattern>
+                                <useSpringBoot3>true</useSpringBoot3>
+                                <useJakartaEe>true</useJakartaEe>
+                                <useTags>true</useTags>
+                                <useResponseEntity>true</useResponseEntity>
+                                <useBeanValidation>true</useBeanValidation>
+                                <performBeanValidation>true</performBeanValidation>
+                                <!-- Keep @RequestMapping on the API interface, not on the controller. -->
+                                <requestMappingMode>api_interface</requestMappingMode>
+                                <!-- swagger2 = the io.swagger.v3.oas.annotations library. -->
+                                <annotationLibrary>swagger2</annotationLibrary>
+                                <documentationProvider>none</documentationProvider>
+                                <!-- Avoids the extra org.openapitools:jackson-databind-nullable dependency. -->
+                                <openApiNullable>false</openApiNullable>
+                                <dateLibrary>java8</dateLibrary>
+                                <skipDefaultInterface>false</skipDefaultInterface>
+                            </configOptions>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>

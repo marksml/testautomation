@@ -21,7 +21,8 @@ If the pull is not a fast-forward, or the working tree has uncommitted changes t
 | Path | Language | Purpose |
 |---|---|---|
 | `pom.xml` | Maven | Parent + aggregator (`testautomation-parent`, `packaging=pom`, parent `spring-boot-starter-parent` 4.1.1) |
-| `service/` | Java 21 | `testautomation-service` — owns the job queue, later the REST API for distributing test cases |
+| `openapi/` | YAML | The HTTP contract (`testautomation-service.yaml`) — source of truth for the generated REST layer |
+| `service/` | Java 21 | `testautomation-service` — owns the job queue and the REST API for distributing test cases |
 | `agent/` | Java 21 | `testautomation-agent` — claims test cases and executes them |
 | `docs/` | Markdown | Design documentation (`postgres-job-queue.md`) |
 | `mvnw`, `.mvn/wrapper/` | shell | Maven wrapper (script-only, Maven 3.9.9) |
@@ -52,9 +53,22 @@ Toolchain on the Hermes VM: JDK 21 at `/opt/data/tools/jdk-21`, Maven at
   the parent chain (Spring Boot BOM). Add a dependency without `<version>` and let the BOM decide.
 - **`spring-boot-maven-plugin` belongs in each module, not in the root POM** — declaring it in the
   aggregator makes the `repackage` goal run for the `pom`-packaging root and fail.
-- **No REST layer and no database schema exist yet, on purpose.** Read
-  `docs/postgres-job-queue.md` first; the open decisions (§7) and the agent wake-up section (§8)
-  define what gets built next. Do not invent a schema or endpoints ahead of those decisions.
+- **Generated REST layer — never edit generated files.** `service/target/generated-sources/openapi`
+  is produced by openapi-generator from `openapi/testautomation-service.yaml` on every build. Change
+  the YAML, regenerate (`./mvnw -pl service generate-sources`), and check the result compiles.
+  Hand-written code goes in `service/src/main/java/…` only; nothing is generated there.
+- **One `JobsApiDelegate` bean, no `@Qualifier`.** The generated controller injects the delegate with
+  `@Autowired(required = false)` and falls back to a default that answers `501`. No bean = a service
+  that starts and answers `501` everywhere; two beans = context startup failure.
+- **Do not set `openapi.testautomationService.base-path`** — the spec paths already start with
+  `/api/v1`, the property only adds a prefix.
+- **`openapi/.openapi-generator-ignore` is load-bearing.** It keeps the generator's sample app, its
+  `application.properties` and two classes in the foreign `org.openapitools.configuration` package
+  out of the output. Removing rules can break the build (the sample's `RFC3339DateFormat` does not
+  compile against Spring Boot 4 / Jackson 3) or silently add a second Spring Boot main class.
+- **No database schema exists yet, on purpose.** Read `docs/postgres-job-queue.md` first; the open
+  decisions (§7) and the agent wake-up section (§8) define what gets built next. Do not invent a
+  schema or extra endpoints ahead of those decisions.
 - The repository was renamed from `testautomation-service` to `testautomation` on GitHub. The old
   URL redirects, but always use the current one in remotes and docs. Local clone path:
   `/opt/data/projects/testautomation`.

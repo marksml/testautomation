@@ -1,0 +1,38 @@
+# Files the openapi-generator-maven-plugin must NOT write into
+# service/target/generated-sources/openapi.
+#
+# The spring generator emits a full sample application next to the API interfaces; that sample
+# would collide with the real Spring Boot application of this module (extra main class, extra
+# application.properties, a test that references them). Only api/, model/ and ApiUtil are wanted.
+
+# Sample application, its resources and its test
+**/OpenApiGeneratorApplication.java
+**/OpenApiGeneratorApplicationTests.java
+**/application.properties
+**/application.yml
+**/pom.xml
+**/README.md
+**/build.gradle
+**/settings.gradle
+**/gradlew
+**/gradlew.bat
+**/gradle/**
+
+# A copy of the spec inside the jar would be a second source of truth
+**/src/main/resources/openapi.yaml
+
+# Unused with <dateLibrary>java8</dateLibrary>, and it imports Jackson 2's ISO8601DateFormat, which
+# no longer exists under Spring Boot 4 (Jackson 3). Nothing references it, so drop it.
+**/invoker/RFC3339DateFormat.java
+
+# Configuration classes in the foreign package org.openapitools.configuration:
+#   HomeController              -> springdoc UI redirect, needs springdoc (not a dependency here)
+#   EnumConverterConfiguration  -> converter for enum path/query params, which this API has none of
+# Add them back only together with their dependencies; if you do, keep them inside the
+# ch.mmar.testautomation.service package so component scan actually sees them.
+**/org/openapitools/configuration/HomeController.java
+**/org/openapitools/configuration/EnumConverterConfiguration.java
+
+# Generator bookkeeping
+**/.openapi-generator-ignore
+**/.openapi-generator/FILES

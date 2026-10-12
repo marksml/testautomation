@@ -1,0 +1,355 @@
+openapi: 3.0.3
+
+info:
+  title: testautomation Service API
+  version: 0.1.0-SNAPSHOT
+  description: |
+    REST contract between test agents and the testautomation service.
+
+    This file is the **single source of truth** for the generated server code. The Maven build
+    (openapi-generator-maven-plugin, see `service/pom.xml`) generates one API interface and one
+    delegate interface per tag into `service/target/generated-sources/openapi`:
+
+    * `ch.mmar.testautomation.service.api.JobsApi` + `JobsApiController` — generated, never edited
+    * `ch.mmar.testautomation.service.api.JobsApiDelegate` — generated interface, implemented by
+      hand in `service/src/main/java/...`
+
+    Design background, the job lifecycle and the long-poll/wake-up mechanism live in
+    `docs/postgres-job-queue.md` (§7 open decisions, §8 idle behaviour). Paths, payloads and the
+    authentication scheme are provisional and expected to change as those decisions are taken —
+    change this file, not the generated code.
+
+    Status: **template** — no endpoint below is implemented yet.
+  contact:
+    name: Michael
+    url: https://github.com/marksml/testautomation
+
+servers:
+  - url: http://localhost:8080
+    description: Local development (service module, default Spring Boot port)
+
+tags:
+  - name: Jobs
+    description: |
+      Claiming, keeping alive and completing test case executions. Agents pull work from here;
+      they never talk to PostgreSQL directly.
+
+paths:
+  /api/v1/jobs/claim:
+    post:
+      tags: [Jobs]
+      operationId: claimTestJob
+      summary: Claim the next test job (long poll)
+      description: |
+        Returns the next claimable test job for this agent, or `204 No Content` when the queue
+        stays empty for `wait` seconds. An agent is expected to call this again immediately after
+        a `204` — that keeps wake-up latency in the millisecond range without hammering the
+        database (see `docs/postgres-job-queue.md` §8).
+
+        The claim is atomic (`SELECT ... FOR UPDATE SKIP LOCKED`), so a job is never handed to two
+        agents. The returned job is leased: the agent must either complete it or renew the lease
+        via `renewTestJobLease` before `leaseExpiresAt`, otherwise the reaper puts it back in the
+        queue.
+      parameters:
+        - name: wait
+          in: query
+          required: false
+          description: |
+            Maximum time in seconds the service keeps the request open while the queue is empty.
+            0 = answer immediately (short poll). Keep this below the idle timeout of any
+            proxy/load balancer in front of the service (and below
+            `spring.mvc.async.request-timeout`).
+          schema:
+            type: integer
+            format: int32
+            minimum: 0
+            maximum: 55
+            default: 25
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobClaimRequest'
+      responses:
+        '200':
+          description: A test job was claimed and is now leased to this agent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestJob'
+        '204':
+          description: No claimable job within the wait window. Call again.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: The agent is not eligible (unknown, disabled, or already at its job limit).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /api/v1/jobs/{jobId}/lease:
+    put:
+      tags: [Jobs]
+      operationId: renewTestJobLease
+      summary: Renew the lease of a running test job (heartbeat)
+      description: |
+        Called periodically by the agent while the test runs. Returns the new lease expiry and the
+        interval at which the next heartbeat is expected. A `409` means the lease was already
+        reclaimed (reaper) — the agent must stop working on that job.
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: Lease renewed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestJobLease'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/JobNotFound'
+        '409':
+          description: Lease lost (expired and reclaimed, or job already finished).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+  /api/v1/jobs/{jobId}/result:
+    post:
+      tags: [Jobs]
+      operationId: submitTestJobResult
+      summary: Submit the result of a finished test job
+      description: |
+        Terminal call of the job lifecycle. Submitting a result for a job whose lease was
+        reclaimed is rejected with `409` — the job is then re-executed by another attempt, and the
+        late result must not overwrite the newer one.
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TestJobResult'
+      responses:
+        '200':
+          description: Result accepted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestJobResultAck'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/JobNotFound'
+        '409':
+          description: Lease lost or job already completed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+
+components:
+
+  parameters:
+    JobId:
+      name: jobId
+      in: path
+      required: true
+      description: Identifier of the test job, as returned by `claimTestJob`.
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid agent credentials.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    JobNotFound:
+      description: No job with this identifier.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+
+  schemas:
+
+    JobClaimRequest:
+      type: object
+      description: What the calling agent is able to run.
+      required: [agentId]
+      properties:
+        agentId:
+          type: string
+          description: Stable identifier of the agent instance (registration is TBD).
+          example: agent-01
+        capabilities:
+          type: array
+          description: |
+            Capability labels the agent offers, e.g. `ui-selenium`, `api-rest`, `linux`. The
+            service only hands out jobs the agent can actually run. Labels are provisional.
+          items:
+            type: string
+          example: [api-rest, linux]
+        labels:
+          type: object
+          description: Free-form agent attributes (environment, region, OS, ...).
+          additionalProperties:
+            type: string
+        maxJobs:
+          type: integer
+          format: int32
+          minimum: 1
+          default: 1
+          description: How many jobs the agent may hold concurrently.
+
+    TestJob:
+      type: object
+      description: One test case execution, leased to exactly one agent.
+      required: [id, testCaseId, attempt, leaseExpiresAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Job identifier; also the `jobId` path parameter of the follow-up calls.
+        testCaseId:
+          type: string
+          description: Reference to the test case definition in its own repository.
+        testCaseName:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+          description: Tags used for routing/selection (e.g. `smoke`, `regression`).
+        parameters:
+          type: object
+          additionalProperties:
+            type: string
+          description: |
+            Input parameters for this execution. Provisional: a richer, typed payload (or a
+            reference to one) is likely once the test case format is defined.
+        attempt:
+          type: integer
+          format: int32
+          minimum: 1
+          description: 1 for the first execution; incremented on every retry after lease expiry.
+        createdAt:
+          type: string
+          format: date-time
+        leaseExpiresAt:
+          type: string
+          format: date-time
+          description: |
+            Deadline for this lease. Renew it via `renewTestJobLease` while the test is running;
+            after expiry the reaper reclaims the job and it is handed out again.
+
+    TestJobLease:
+      type: object
+      required: [jobId, leaseExpiresAt, heartbeatIntervalSeconds]
+      properties:
+        jobId:
+          type: string
+          format: uuid
+        leaseExpiresAt:
+          type: string
+          format: date-time
+        heartbeatIntervalSeconds:
+          type: integer
+          format: int32
+          minimum: 1
+          description: Interval at which the agent should send the next heartbeat.
+
+    TestJobResult:
+      type: object
+      required: [status, startedAt, finishedAt]
+      properties:
+        status:
+          $ref: '#/components/schemas/TestResultStatus'
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+        durationMs:
+          type: integer
+          format: int64
+          minimum: 0
+        message:
+          type: string
+          description: Short human-readable summary (failure reason, assertion diff, ...).
+        stackTrace:
+          type: string
+          description: Optional raw failure output; may be truncated.
+        artifacts:
+          type: array
+          items:
+            $ref: '#/components/schemas/TestArtifact'
+
+    TestArtifact:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          example: screenshot-login-failure.png
+        mediaType:
+          type: string
+          example: image/png
+        sizeBytes:
+          type: integer
+          format: int64
+        uri:
+          type: string
+          description: |
+            Where the artifact can be fetched from. Provisional: upload/retention strategy is not
+            decided yet.
+        sha256:
+          type: string
+
+    TestJobResultAck:
+      type: object
+      required: [jobId, status]
+      properties:
+        jobId:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/TestResultStatus'
+        acceptedAt:
+          type: string
+          format: date-time
+
+    TestResultStatus:
+      type: string
+      description: Terminal state of a test case execution.
+      enum: [PASSED, FAILED, ERROR, SKIPPED, CANCELLED]
+
+    ApiError:
+      type: object
+      description: Error payload. Provisional — an RFC 7807 `ProblemDetail` shape is the likely
+        alternative once the error-handling convention is fixed.
+      required: [status, message]
+      properties:
+        status:
+          type: integer
+          format: int32
+          example: 409
+        code:
+          type: string
+          description: Machine-readable error code, e.g. `LEASE_LOST`, `AGENT_UNKNOWN`.
+          example: LEASE_LOST
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties:
+            type: string

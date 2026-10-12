@@ -140,8 +140,9 @@ design below is settled.
 - [`docs/postgres-job-queue.md`](docs/postgres-job-queue.md) — how a PostgreSQL job queue works
   (`SELECT ... FOR UPDATE SKIP LOCKED`, job states, lease/reaper, `LISTEN/NOTIFY`), which ports and
   connections it needs (PostgreSQL 5432, PgBouncer 6432, pool sizing vs `max_connections`), how
-  agents idle and learn about new work (§8: long polling, in-process wake-up), Java library options
-  and the decisions still open.
+  agents idle and learn about new work (§8: long polling, in-process wake-up), how it compares to a
+  dedicated message broker (§9: RabbitMQ/Kafka/SQS, dimension by dimension) and the decisions still
+  open (§7).
 
 ## Next steps
 

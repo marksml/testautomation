@@ -245,7 +245,62 @@ Rules that keep long polling healthy:
 - **Idle-time liveness**: heartbeat/health endpoints must keep answering while the queue is empty,
   otherwise the instance is removed from the load balancer exactly when work arrives.
 
-## 9. References
+## 9. Alternative: a dedicated message broker — is PostgreSQL "just as good"?
+
+Not equivalent in general, but for *this* workload the deciding dimensions fall in PostgreSQL's
+favour. A broker is not faster where it matters here, and it costs a second system plus a dual-write
+problem. The honest framing: this is not "queue vs. broker", it is "one system that already stores
+the job state vs. that system plus a broker".
+
+| Dimension | PostgreSQL queue + long poll | Dedicated broker | Verdict here |
+|---|---|---|---|
+| Exactly-one-agent execution | claim = row lock (`FOR UPDATE SKIP LOCKED`) | ack/nack + redelivery (RabbitMQ), offset commit (Kafka), visibility timeout (SQS) | **equal** — both are at-least-once; both need idempotent effects |
+| Throughput ceiling | one hot spot at the queue head; bounded by pool size × transaction latency; comfortable at hundreds to low thousands of jobs/s | RabbitMQ quorum queue (third-party benchmark): ~11k send / ~5k receive msg/s; SQS standard: nearly unlimited TPS, FIFO: 300 msg/s (3,000 batched) | **PostgreSQL**, because our load is < 1 job/s and the bottleneck is test execution time |
+| Enqueue atomically with domain data | same commit — no dual write, no consistency window | broker is outside the transaction → outbox table + relay + dedupe on the consumer side | **PostgreSQL, strongly** |
+| Routing/selection (capabilities, tags, priority) | a `WHERE` clause over any column/expression | routing keys/topics or a queue per capability; complex predicates become broker topology | **PostgreSQL** for capability matching |
+| Delayed retries, quotas, dedupe, "one job per test case at a time" | SQL (`run_at`, partial unique index, `pg_advisory_xact_lock`) | needs a plugin (RabbitMQ delayed-message exchange) or an extra scheduler | **PostgreSQL** |
+| Live view ("which job is stuck in which state?") | `SELECT` | broker UI *plus* a mirror table — the state ends up in the database anyway | **PostgreSQL** |
+| Replay / fan-out to other consumers | rows are consumed and gone; no history to re-read | Kafka retains the log, offsets allow replay, consumer groups allow independent readers | **broker** — irrelevant today; matters if test results also become an event stream for analytics/audit |
+| Extreme burst absorption (millions of events) | would need partitioning/batch dequeue and vacuum tuning | designed for exactly that | **broker** — not our shape: a work list, not a firehose |
+| Operations on 2 vCPU / 4 GB | already running: one backup, one TLS setup, one monitoring, one upgrade path | RabbitMQ quorum queues want a 3-node cluster for HA and its own reference benchmark ran on 14 CPU / 12 GiB; quorum queue metadata alone reserves ~1 MB per 30k queued messages; Kafka adds brokers, KRaft and retention disks | **PostgreSQL, clearly** |
+
+### What the PostgreSQL variant demands in return
+
+The mechanism is only "as good" if these are respected — they are the price of not having a broker:
+
+1. Claim with `FOR UPDATE SKIP LOCKED` (never `SELECT` + `UPDATE`), against the partial index (§1).
+2. Lease + reaper instead of holding a transaction open while the test runs (§3).
+3. **Hash out the churn**: each job row is updated several times (queued → running → succeeded, plus
+   lease renewals), which is exactly the workload autovacuum is worst at with defaults
+   (`autovacuum_vacuum_scale_factor` 0.2, `autovacuum_vacuum_threshold` 50,
+   `autovacuum_naptime` 1min, `autovacuum_max_workers` 3). Set per-table storage parameters
+   (lower scale factor, e.g. `0.02`) and a `fillfactor` below the default 100, so updates stay on
+   the same page and become heap-only tuple updates instead of multiplying index entries.
+4. **Keep the queue table lean.** Move finished jobs into a history table (`job_results` /
+   `job_history`) and delete them from the live table: the partial index stays small, the claimed
+   set stays hot in cache, and vacuum has less to do. History is where reporting reads from.
+5. **Results must be idempotent on `(job_id, attempt)`.** At-least-once means a lease can expire on a
+   job that actually completed — the late result must never overwrite a newer attempt's result.
+6. Watch the two limits that people hit in production: pool size (a claim is a transaction, so claims/s
+   ≈ pool_size ÷ transaction_latency) and the vacuum backlog (`n_dead_tup` in `pg_stat_user_tables`).
+
+### When this decision should be revisited
+
+Flip to a broker if any of these becomes true, not before:
+
+- sustained claim rate in the thousands per second (roughly where the queue head becomes the bottleneck);
+- a second consumer class needs the same executions as a *replayable* event log (analytics, audit,
+  notifications) — then emit through an outbox into Kafka as a **secondary** sink, keeping the queue
+  itself in PostgreSQL;
+- agents/consumers appear that cannot hold a database relationship at all and need a broker's
+  push/dead-letter semantics in their own ecosystem.
+
+The migration cost is deliberately small: the claim/renew/complete trio is one seam behind the
+delegate interface (`JobsApiDelegate`), and the queue table is owned by one module. Note also what a
+broker would *not* solve here: pushing live test progress to a UI is a job for SSE/WebSocket from the
+service, not for a message broker.
+
+## 10. References
 
 **PostgreSQL (official)**
 - `SELECT` — locking clause / `SKIP LOCKED`: https://www.postgresql.org/docs/current/sql-select.html#SQL-FOR-UPDATE-SHARE
@@ -264,6 +319,16 @@ Rules that keep long polling healthy:
 - Matthews Wong, *A Reliable Job Queue in PostgreSQL with SKIP LOCKED*: https://www.matthewswong.com/en/blog/postgres-skip-locked-job-queue/
 - Netdata Academy, *Using FOR UPDATE SKIP LOCKED For Queue Workflows*: https://www.netdata.cloud/academy/update-skip-locked/
 - Terri S. Linenbach, *Why FOR UPDATE SKIP LOCKED Isn't Enough: pg_advisory_xact_lock* (global concurrency limits, duplicate-active-job prevention): https://terrislinenbach.medium.com/why-for-update-skip-locked-isnt-enough-using-pg-advisory-xact-lock-to-build-a-correct-postgresql-d3eb9db46473
+
+**Message brokers and high-churn tables**
+- RabbitMQ — *Quorum Queues* (memory: ≥ 1 MB per 30,000 queued messages of metadata; trades latency for throughput): https://www.rabbitmq.com/docs/quorum-queues
+- RabbitMQ — *3.12 performance improvements* (quorum queue consumption; reference cluster 14 CPU / 12 GiB): https://www.rabbitmq.com/blog/2023/05/17/rabbitmq-3.12-performance-improvements
+- DZone — *Battle of the RabbitMQ Queues: Classic vs. Quorum* (third-party benchmark, ~11k send / ~5k receive msg/s): https://dzone.com/articles/battle-of-the-rabbitmq-queues-performance-insights
+- Amazon SQS — *Message quotas* (standard queues: nearly unlimited TPS; FIFO: 300 msg/s, 3,000 batched): https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/quotas-messages.html
+- Amazon SQS — *Features* (queue type comparison): https://aws.amazon.com/sqs/features/
+- PostgreSQL — *Vacuuming* (`autovacuum_vacuum_scale_factor` 0.2, `autovacuum_vacuum_threshold` 50, `autovacuum_naptime` 1min, `autovacuum_max_workers` 3): https://www.postgresql.org/docs/current/runtime-config-vacuum.html
+- PostgreSQL — *CREATE TABLE*, storage parameters (`fillfactor`: 100 is the default, lower values make heap-only tuple updates more likely): https://www.postgresql.org/docs/current/sql-createtable.html
+- PostgreSQL — *Heap-Only Tuples*: https://www.postgresql.org/docs/current/storage-hot.html
 
 **Spring (official)**
 - Spring Framework — *Asynchronous Requests* (`DeferredResult`, async timeouts, SSE): https://docs.spring.io/spring-framework/reference/web/webmvc/mvc-ann-async.html

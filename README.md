@@ -143,6 +143,11 @@ design below is settled.
   agents idle and learn about new work (§8: long polling, in-process wake-up), how it compares to a
   dedicated message broker (§9: RabbitMQ/Kafka/SQS, dimension by dimension) and the decisions still
   open (§7).
+- [`docs/service-api-sequences.md`](docs/service-api-sequences.md) — who calls which endpoint and in
+  which order (Jira client / desktop registering executions, agents claiming and reporting), job
+  identity `(issueKey, executionKey)` with generations, the state machine incl. `DEAD`, failure
+  semantics, agent inventory, capability matching and the Jira status push. **Proposal, awaiting
+  review** — the spec has not been changed to match it yet.
 
 ## Next steps
 

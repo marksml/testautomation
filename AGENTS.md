@@ -24,7 +24,7 @@ If the pull is not a fast-forward, or the working tree has uncommitted changes t
 | `openapi/` | YAML | The HTTP contract (`testautomation-service.yaml`) — source of truth for the generated REST layer |
 | `service/` | Java 21 | `testautomation-service` — owns the job queue and the REST API for distributing test cases |
 | `agent/` | Java 21 | `testautomation-agent` — claims test cases and executes them |
-| `docs/` | Markdown | Design documentation (`postgres-job-queue.md`) |
+| `docs/` | Markdown | Design documentation (`postgres-job-queue.md` = queue mechanics, `service-api-sequences.md` = endpoint semantics and call sequence) |
 | `mvnw`, `.mvn/wrapper/` | shell | Maven wrapper (script-only, Maven 3.9.9) |
 
 Package roots: `ch.mmar.testautomation.service` and `ch.mmar.testautomation.agent`.

@@ -2,24 +2,25 @@ openapi: 3.0.3
 
 info:
   title: testautomation Service API
-  version: 0.1.0-SNAPSHOT
+  version: 0.2.0-SNAPSHOT
   description: |
-    REST contract between test agents and the testautomation service.
+    REST contract of the testautomation service: producers register test job runs, agents claim
+    and execute them, and the service owns all state (agents and clients have no database access).
 
     This file is the **single source of truth** for the generated server code. The Maven build
     (openapi-generator-maven-plugin, see `service/pom.xml`) generates one API interface and one
     delegate interface per tag into `service/target/generated-sources/openapi`:
 
     * `ch.mmar.testautomation.service.api.JobsApi` + `JobsApiController` — generated, never edited
-    * `ch.mmar.testautomation.service.api.JobsApiDelegate` — generated interface, implemented by
-      hand in `service/src/main/java/...`
+    * `ch.mmar.testautomation.service.api.JobsApiDelegate` — generated interface, implemented by hand
+    * `ch.mmar.testautomation.service.api.AgentsApi` + `AgentsApiController` + `AgentsApiDelegate`
 
-    Design background, the job lifecycle and the long-poll/wake-up mechanism live in
-    `docs/postgres-job-queue.md` (§7 open decisions, §8 idle behaviour). Paths, payloads and the
-    authentication scheme are provisional and expected to change as those decisions are taken —
-    change this file, not the generated code.
+    Semantics, call sequences, failure handling and the open design points live in
+    `docs/service-api-sequences.md` (endpoint contract) and `docs/postgres-job-queue.md` (queue
+    mechanics, lease/reaper, idle behaviour). Change this file, not the generated code.
 
-    Status: **template** — no endpoint below is implemented yet.
+    Status: the endpoints exist and are routed; they answer `501 Not Implemented` until a delegate
+    implementation is provided. Authentication is declared but not enforced.
   contact:
     name: Michael
     url: https://github.com/marksml/testautomation
@@ -31,34 +32,163 @@ servers:
 tags:
   - name: Jobs
     description: |
-      Claiming, keeping alive and completing test case executions. Agents pull work from here;
-      they never talk to PostgreSQL directly.
+      Registering, reading, claiming, keeping alive and completing test job runs. Producers (Jira
+      client, testautomation-desktop) use the first three; test agents use the rest. Agents never
+      talk to PostgreSQL directly.
+  - name: Agents
+    description: |
+      Agent inventory: registration with capabilities, liveness and deregistration. The service
+      derives liveness from any authenticated agent call, so no separate idle heartbeat is required.
+
+security:
+  - bearerAuth: []
 
 paths:
+
+  /api/v1/jobs:
+    post:
+      tags: [Jobs]
+      operationId: registerJobRun
+      summary: Register a job run for a Jira issue
+      description: |
+        Creates a **new, independent run**: the client sends the issue key, the service generates
+        the `jobRunId` and returns it. Registering the same issue key twice produces two runs, both
+        executed — there is no de-duplication and no overwrite. Each run is pushed to Jira on its
+        own as soon as it finishes, regardless of which run of that issue finishes last.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: |
+            Optional. A producer that may retry a registration (Jira webhook redelivery, flaky
+            network) can send a unique key here; the service then returns the run created for that
+            key instead of creating a second one. Without the header, every call creates a run.
+          schema:
+            type: string
+            example: 6f0c2f1e-1b8e-4a4e-9d3f-2b7a6c1d8e44
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobRunRegistration'
+      responses:
+        '201':
+          description: Run created.
+          headers:
+            Location:
+              description: URL of the created run (`GET /api/v1/jobs/{jobRunId}`).
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobRun'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+    get:
+      tags: [Jobs]
+      operationId: listJobRuns
+      summary: List job runs
+      description: |
+        Answers "what happened with this issue?" — one issue can have many runs, so this is the
+        endpoint the desktop component and operators need. Newest first.
+      parameters:
+        - name: issueKey
+          in: query
+          required: false
+          description: Only runs of this Jira issue.
+          schema:
+            type: string
+            example: TEST-4711
+        - name: status
+          in: query
+          required: false
+          description: Only runs in this state.
+          schema:
+            $ref: '#/components/schemas/JobRunStatus'
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 200
+            default: 20
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int32
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: A page of runs.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobRunPage'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/v1/jobs/{jobRunId}:
+    get:
+      tags: [Jobs]
+      operationId: getJobRun
+      summary: Read one job run
+      description: |
+        Current state of the run and, once it is terminal, its result. `DEAD` is a regular status
+        here: a run whose attempts were exhausted.
+      parameters:
+        - $ref: '#/components/parameters/JobRunId'
+      responses:
+        '200':
+          description: The run.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JobRun'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/JobRunNotFound'
+
   /api/v1/jobs/claim:
     post:
       tags: [Jobs]
-      operationId: claimTestJob
-      summary: Claim the next test job (long poll)
+      operationId: claimJobRun
+      summary: Claim the next job run (long poll)
       description: |
-        Returns the next claimable test job for this agent, or `204 No Content` when the queue
-        stays empty for `wait` seconds. An agent is expected to call this again immediately after
-        a `204` — that keeps wake-up latency in the millisecond range without hammering the
-        database (see `docs/postgres-job-queue.md` §8).
+        Returns the next claimable run for this agent, or `204 No Content` when nothing is
+        claimable within `wait` seconds. An agent is expected to call again immediately after a
+        `204`; that keeps wake-up latency in the millisecond range without hammering the database
+        (`docs/postgres-job-queue.md` §8).
 
-        The claim is atomic (`SELECT ... FOR UPDATE SKIP LOCKED`), so a job is never handed to two
-        agents. The returned job is leased: the agent must either complete it or renew the lease
-        via `renewTestJobLease` before `leaseExpiresAt`, otherwise the reaper puts it back in the
-        queue.
+        The claim is atomic (`SELECT ... FOR UPDATE SKIP LOCKED`), so a run is never handed to two
+        agents. Requirements are matched against the agent's registered capabilities
+        (`run.requiresCapabilities ⊆ agent.capabilities`) and its `maxJobs` limit. The run is
+        leased: complete it, or renew the lease via `renewJobRunLease` before `leaseExpiresAt`,
+        otherwise the reaper re-queues it as a new attempt.
+
+        The response carries everything needed to execute — parameters, requirements, attempt,
+        lease deadline and the heartbeat interval — so the agent knows the cadence right after
+        claiming, without waiting for the first renewal.
       parameters:
         - name: wait
           in: query
           required: false
           description: |
-            Maximum time in seconds the service keeps the request open while the queue is empty.
-            0 = answer immediately (short poll). Keep this below the idle timeout of any
-            proxy/load balancer in front of the service (and below
-            `spring.mvc.async.request-timeout`).
+            Maximum time in seconds the service keeps the request open while nothing is claimable.
+            0 = answer immediately (short poll). Keep it below the idle timeout of any proxy or
+            load balancer in front of the service and below `spring.mvc.async.request-timeout`.
           schema:
             type: integer
             format: int32
@@ -73,107 +203,239 @@ paths:
               $ref: '#/components/schemas/JobClaimRequest'
       responses:
         '200':
-          description: A test job was claimed and is now leased to this agent.
+          description: A run was claimed and is now leased to this agent.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TestJob'
+                $ref: '#/components/schemas/ClaimedJobRun'
         '204':
-          description: No claimable job within the wait window. Call again.
+          description: Nothing claimable within the wait window. Call again.
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '409':
-          description: The agent is not eligible (unknown, disabled, or already at its job limit).
+          description: The agent may not claim (unknown/unregistered, or at its job limit).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiError'
 
-  /api/v1/jobs/{jobId}/lease:
+  /api/v1/jobs/{jobRunId}/lease:
     put:
       tags: [Jobs]
-      operationId: renewTestJobLease
-      summary: Renew the lease of a running test job (heartbeat)
+      operationId: renewJobRunLease
+      summary: Renew the lease of a running job run (heartbeat)
       description: |
-        Called periodically by the agent while the test runs. Returns the new lease expiry and the
-        interval at which the next heartbeat is expected. A `409` means the lease was already
-        reclaimed (reaper) — the agent must stop working on that job.
+        Called periodically by the agent while the test runs. A `409` means the lease is no longer
+        this agent's (expired and reclaimed, superseded by a newer attempt, or the run is already
+        terminal) — the agent must stop working on that run.
       parameters:
-        - $ref: '#/components/parameters/JobId'
+        - $ref: '#/components/parameters/JobRunId'
       responses:
         '200':
           description: Lease renewed.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TestJobLease'
+                $ref: '#/components/schemas/JobRunLease'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
-          $ref: '#/components/responses/JobNotFound'
+          $ref: '#/components/responses/JobRunNotFound'
         '409':
-          description: Lease lost (expired and reclaimed, or job already finished).
+          description: Lease lost (`LEASE_LOST`) or run already terminal (`ALREADY_TERMINAL`).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiError'
 
-  /api/v1/jobs/{jobId}/result:
+  /api/v1/jobs/{jobRunId}/result:
     post:
       tags: [Jobs]
-      operationId: submitTestJobResult
-      summary: Submit the result of a finished test job
+      operationId: submitJobRunResult
+      summary: Submit the result of a finished job run
       description: |
-        Terminal call of the job lifecycle. Submitting a result for a job whose lease was
-        reclaimed is rejected with `409` — the job is then re-executed by another attempt, and the
-        late result must not overwrite the newer one.
+        Terminal call of the run lifecycle. A result is accepted only from the agent currently
+        holding the lease of that run:
+
+        * run not yet terminal → accepted; the run becomes terminal and the Jira push is queued in
+          the same commit;
+        * run already terminal with the **same** status → `200` with the same ack (a retry after a
+          network error must be harmless);
+        * run already terminal with a **different** status → `409 ALREADY_TERMINAL`;
+        * caller is not the lease holder (lease expired and reclaimed, i.e. a superseded attempt) →
+          `409 LEASE_LOST`.
+
+        Artifacts travel in-band in this payload.
       parameters:
-        - $ref: '#/components/parameters/JobId'
+        - $ref: '#/components/parameters/JobRunId'
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/TestJobResult'
+              $ref: '#/components/schemas/JobRunResult'
       responses:
         '200':
-          description: Result accepted.
+          description: Result accepted (or already recorded with the same status).
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TestJobResultAck'
+                $ref: '#/components/schemas/JobRunResultAck'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
-          $ref: '#/components/responses/JobNotFound'
+          $ref: '#/components/responses/JobRunNotFound'
         '409':
-          description: Lease lost or job already completed.
+          description: Lease lost or run already terminal with a different status.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiError'
 
+  /api/v1/agents:
+    post:
+      tags: [Agents]
+      operationId: registerAgent
+      summary: Register or update this agent (upsert)
+      description: |
+        Idempotent on `agentId`: re-registering refreshes capabilities, labels and `maxJobs`. The
+        response tells the agent the heartbeat interval and the liveness window it is expected to
+        stay inside. Every authenticated agent call (claim, lease, result) counts as a sign of
+        life, so an idle agent needs nothing extra.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentRegistration'
+      responses:
+        '200':
+          description: Agent registered or updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Agent'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+    get:
+      tags: [Agents]
+      operationId: listAgents
+      summary: Agent inventory
+      description: |
+        Which agents exist, what they can do, when they were last seen and how many runs they
+        currently hold.
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: Only agents in this liveness state.
+          schema:
+            $ref: '#/components/schemas/AgentStatus'
+      responses:
+        '200':
+          description: Registered agents.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Agent'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/v1/agents/{agentId}:
+    get:
+      tags: [Agents]
+      operationId: getAgent
+      summary: Read one agent
+      parameters:
+        - $ref: '#/components/parameters/AgentId'
+      responses:
+        '200':
+          description: The agent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Agent'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/AgentNotFound'
+
+    delete:
+      tags: [Agents]
+      operationId: deregisterAgent
+      summary: Deregister an agent (graceful shutdown)
+      description: |
+        Marks the agent `OFFLINE` instead of waiting for the liveness window to pass. Does **not**
+        cancel runs the agent currently holds — their leases expire and the reaper re-queues them.
+      parameters:
+        - $ref: '#/components/parameters/AgentId'
+      responses:
+        '204':
+          description: Agent marked offline.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/AgentNotFound'
+
 components:
 
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        Role-scoped token (`producer` = Jira client and desktop, `agent` = test agents, `ops` =
+        inventory and queue views). Declared for the contract only — enforcement is not implemented
+        yet, see `docs/service-api-sequences.md` §10.
+
   parameters:
-    JobId:
-      name: jobId
+    JobRunId:
+      name: jobRunId
       in: path
       required: true
-      description: Identifier of the test job, as returned by `claimTestJob`.
+      description: Identifier of the run, as returned by `registerJobRun` or `claimJobRun`.
       schema:
         type: string
         format: uuid
+    AgentId:
+      name: agentId
+      in: path
+      required: true
+      description: Stable identifier an agent uses to register itself.
+      schema:
+        type: string
+        example: agent-01
 
   responses:
     Unauthorized:
-      description: Missing or invalid agent credentials.
+      description: Missing or invalid credentials for this role.
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ApiError'
-    JobNotFound:
-      description: No job with this identifier.
+    BadRequest:
+      description: Malformed or invalid request payload.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    JobRunNotFound:
+      description: No run with this identifier.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+    AgentNotFound:
+      description: No agent with this identifier.
       content:
         application/json:
           schema:
@@ -181,66 +443,191 @@ components:
 
   schemas:
 
-    JobClaimRequest:
+    JobRunRegistration:
       type: object
-      description: What the calling agent is able to run.
-      required: [agentId]
+      description: What a producer sends to register one run of a Jira issue.
+      required: [issueKey]
       properties:
-        agentId:
+        issueKey:
           type: string
-          description: Stable identifier of the agent instance (registration is TBD).
-          example: agent-01
-        capabilities:
-          type: array
+          description: Jira issue the run belongs to. Several runs may exist per issue.
+          example: TEST-4711
+        testCaseRef:
+          type: string
           description: |
-            Capability labels the agent offers, e.g. `ui-selenium`, `api-rest`, `linux`. The
-            service only hands out jobs the agent can actually run. Labels are provisional.
-          items:
-            type: string
-          example: [api-rest, linux]
-        labels:
-          type: object
-          description: Free-form agent attributes (environment, region, OS, ...).
-          additionalProperties:
-            type: string
-        maxJobs:
-          type: integer
-          format: int32
-          minimum: 1
-          default: 1
-          description: How many jobs the agent may hold concurrently.
-
-    TestJob:
-      type: object
-      description: One test case execution, leased to exactly one agent.
-      required: [id, testCaseId, attempt, leaseExpiresAt]
-      properties:
-        id:
-          type: string
-          format: uuid
-          description: Job identifier; also the `jobId` path parameter of the follow-up calls.
-        testCaseId:
-          type: string
-          description: Reference to the test case definition in its own repository.
-        testCaseName:
-          type: string
-        tags:
-          type: array
-          items:
-            type: string
-          description: Tags used for routing/selection (e.g. `smoke`, `regression`).
+            Optional reference to the test case to execute. Omitted when the issue key alone
+            determines what runs — whether that mapping exists, or whether every producer must name
+            a test, is still open (`docs/service-api-sequences.md` §12.1).
+          example: TC-LOGIN-002
         parameters:
           type: object
           additionalProperties:
             type: string
+          description: Key/value inputs for this execution.
+          example: {browser: chrome, env: staging}
+        requiresCapabilities:
+          type: array
           description: |
-            Input parameters for this execution. Provisional: a richer, typed payload (or a
-            reference to one) is likely once the test case format is defined.
+            Capability labels the executing agent must offer (e.g. `ui-selenium`, `api-rest`,
+            `linux`). All of them must be part of the agent's registered capabilities. Empty or
+            absent means "any registered agent".
+          items:
+            type: string
+          example: [api-rest, linux]
+        priority:
+          type: integer
+          format: int32
+          default: 0
+          description: Higher value is claimed first.
+        maxAttempts:
+          type: integer
+          format: int32
+          minimum: 1
+          description: |
+            How many attempts this run may consume before it becomes `DEAD`. Omitted → the service
+            applies its own default.
+
+    JobRunStatus:
+      type: string
+      description: |
+        State of a run. `SUCCEEDED`, `FAILED`, `ERROR`, `SKIPPED`, `CANCELLED` and `DEAD` are
+        terminal.
+      enum: [QUEUED, RUNNING, SUCCEEDED, FAILED, ERROR, SKIPPED, CANCELLED, DEAD]
+
+    TestResultStatus:
+      type: string
+      description: Outcome an agent reports for a run.
+      enum: [PASSED, FAILED, ERROR, SKIPPED, CANCELLED]
+
+    JobRunSummary:
+      type: object
+      description: One run in a list response.
+      required: [jobRunId, issueKey, status, attempt, createdAt]
+      properties:
+        jobRunId:
+          type: string
+          format: uuid
+        issueKey:
+          type: string
+          example: TEST-4711
+        testCaseRef:
+          type: string
+        status:
+          $ref: '#/components/schemas/JobRunStatus'
         attempt:
           type: integer
           format: int32
           minimum: 1
-          description: 1 for the first execution; incremented on every retry after lease expiry.
+          description: |
+            1 for the first execution; incremented whenever the run is re-queued after a lease
+            expiry or a superseded attempt.
+        agentId:
+          type: string
+          description: Agent holding (or last holding) the lease of this run.
+        createdAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+
+    JobRun:
+      type: object
+      description: Full state of one run, including its result once it is terminal.
+      required: [jobRunId, issueKey, status, attempt, createdAt]
+      properties:
+        jobRunId:
+          type: string
+          format: uuid
+        issueKey:
+          type: string
+          example: TEST-4711
+        testCaseRef:
+          type: string
+        status:
+          $ref: '#/components/schemas/JobRunStatus'
+        attempt:
+          type: integer
+          format: int32
+          minimum: 1
+        agentId:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+        leaseExpiresAt:
+          type: string
+          format: date-time
+          description: Deadline of the current lease while the run is `RUNNING`.
+        result:
+          $ref: '#/components/schemas/JobRunResult'
+
+    JobRunPage:
+      type: object
+      description: One page of runs.
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/JobRunSummary'
+        total:
+          type: integer
+          format: int64
+          description: Total number of runs matching the filter.
+        limit:
+          type: integer
+          format: int32
+        offset:
+          type: integer
+          format: int32
+
+    JobClaimRequest:
+      type: object
+      description: |
+        An agent asking for work. Capabilities and `maxJobs` come from its registration, not from
+        this payload.
+      required: [agentId]
+      properties:
+        agentId:
+          type: string
+          example: agent-01
+
+    ClaimedJobRun:
+      type: object
+      description: |
+        Everything the agent needs to execute the run. Self-contained on purpose: an agent has no
+        database access and must not have to look anything up elsewhere.
+      required: [jobRunId, issueKey, attempt, leaseExpiresAt, heartbeatIntervalSeconds]
+      properties:
+        jobRunId:
+          type: string
+          format: uuid
+        issueKey:
+          type: string
+        testCaseRef:
+          type: string
+        parameters:
+          type: object
+          additionalProperties:
+            type: string
+        requiresCapabilities:
+          type: array
+          items:
+            type: string
+        attempt:
+          type: integer
+          format: int32
+          minimum: 1
         createdAt:
           type: string
           format: date-time
@@ -248,14 +635,19 @@ components:
           type: string
           format: date-time
           description: |
-            Deadline for this lease. Renew it via `renewTestJobLease` while the test is running;
-            after expiry the reaper reclaims the job and it is handed out again.
+            Renew it with `renewJobRunLease` before this deadline, or the run is re-queued as a new
+            attempt.
+        heartbeatIntervalSeconds:
+          type: integer
+          format: int32
+          minimum: 1
+          description: Interval at which the agent should send the next heartbeat.
 
-    TestJobLease:
+    JobRunLease:
       type: object
-      required: [jobId, leaseExpiresAt, heartbeatIntervalSeconds]
+      required: [jobRunId, leaseExpiresAt, heartbeatIntervalSeconds]
       properties:
-        jobId:
+        jobRunId:
           type: string
           format: uuid
         leaseExpiresAt:
@@ -265,10 +657,10 @@ components:
           type: integer
           format: int32
           minimum: 1
-          description: Interval at which the agent should send the next heartbeat.
 
-    TestJobResult:
+    JobRunResult:
       type: object
+      description: Terminal outcome reported by the agent. Artifacts travel in-band.
       required: [status, startedAt, finishedAt]
       properties:
         status:
@@ -291,6 +683,7 @@ components:
           description: Optional raw failure output; may be truncated.
         artifacts:
           type: array
+          description: In-band artifacts; uploading large files separately is not defined yet.
           items:
             $ref: '#/components/schemas/TestArtifact'
 
@@ -309,17 +702,15 @@ components:
           format: int64
         uri:
           type: string
-          description: |
-            Where the artifact can be fetched from. Provisional: upload/retention strategy is not
-            decided yet.
+          description: Where the artifact can be fetched from, if it is stored somewhere.
         sha256:
           type: string
 
-    TestJobResultAck:
+    JobRunResultAck:
       type: object
-      required: [jobId, status]
+      required: [jobRunId, status]
       properties:
-        jobId:
+        jobRunId:
           type: string
           format: uuid
         status:
@@ -328,14 +719,89 @@ components:
           type: string
           format: date-time
 
-    TestResultStatus:
+    AgentRegistration:
+      type: object
+      description: What an agent sends on startup. Upsert on `agentId`.
+      required: [agentId]
+      properties:
+        agentId:
+          type: string
+          description: Stable identifier of the agent instance, taken from its configuration.
+          example: agent-01
+        name:
+          type: string
+          description: Human-readable name for the inventory.
+          example: build-node-01
+        capabilities:
+          type: array
+          description: Capability labels this agent offers; runs are matched against these.
+          items:
+            type: string
+          example: [api-rest, linux]
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+          description: Free-form attributes (environment, region, OS, ...).
+          example: {env: staging, os: linux}
+        maxJobs:
+          type: integer
+          format: int32
+          minimum: 1
+          default: 1
+          description: How many runs the agent may hold concurrently. Enforced server-side.
+        version:
+          type: string
+          description: Agent build version, for the inventory.
+          example: 0.2.0
+
+    AgentStatus:
       type: string
-      description: Terminal state of a test case execution.
-      enum: [PASSED, FAILED, ERROR, SKIPPED, CANCELLED]
+      description: |
+        `ACTIVE` = seen within the liveness window, `STALE` = not seen for longer than that,
+        `OFFLINE` = deregistered explicitly.
+      enum: [ACTIVE, STALE, OFFLINE]
+
+    Agent:
+      type: object
+      required: [agentId, status]
+      properties:
+        agentId:
+          type: string
+        name:
+          type: string
+        capabilities:
+          type: array
+          items:
+            type: string
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+        maxJobs:
+          type: integer
+          format: int32
+        version:
+          type: string
+        status:
+          $ref: '#/components/schemas/AgentStatus'
+        registeredAt:
+          type: string
+          format: date-time
+        lastSeenAt:
+          type: string
+          format: date-time
+          description: Updated by any authenticated call from this agent.
+        activeRuns:
+          type: integer
+          format: int32
+          description: Runs the agent currently holds a lease for.
 
     ApiError:
       type: object
-      description: Error payload. Provisional — an RFC 7807 `ProblemDetail` shape is the likely
+      description: |
+        Error payload. Codes in use: `VALIDATION_FAILED`, `LEASE_LOST`, `ALREADY_TERMINAL`,
+        `AGENT_UNKNOWN`, `JOB_RUN_UNKNOWN`. An RFC 7807 `ProblemDetail` shape is the likely
         alternative once the error-handling convention is fixed.
       required: [status, message]
       properties:
@@ -345,7 +811,6 @@ components:
           example: 409
         code:
           type: string
-          description: Machine-readable error code, e.g. `LEASE_LOST`, `AGENT_UNKNOWN`.
           example: LEASE_LOST
         message:
           type: string

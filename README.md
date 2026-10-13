@@ -13,9 +13,9 @@ module (e.g. `shared/`) is the natural place for it.
 
 ## Status
 
-Skeleton plus a **generated REST layer** — the endpoints exist and answer (with the generated
-delegate's default `501 Not Implemented`) but are **not implemented**: no queue, no persistence,
-no agent client loop yet.
+Skeleton plus a **generated REST layer** — ten endpoints exist and are routed (answering the
+generated delegates' default `501 Not Implemented`), but nothing is implemented behind them: no
+queue, no persistence, no Jira push, no agent client loop.
 Java 21, Maven, Spring Boot 4.1.1 (parent-managed dependency versions, no version numbers in the
 module POMs).
 
@@ -56,60 +56,105 @@ hand-written code can never be overwritten by a build step.
 ```
 
 Generated into `service/target/generated-sources/openapi/src/main/java/` (git-ignored, added to the
-compile source root by the plugin):
+compile source root by the plugin) — two tags, so two controllers and two delegate interfaces:
 
 ```
-ch/mmar/testautomation/service/api/JobsApi.java           @RequestMapping/@Validated interface
-ch/mmar/testautomation/service/api/JobsApiController.java @Controller, injects the delegate
-ch/mmar/testautomation/service/api/JobsApiDelegate.java   ← the interface you implement
-ch/mmar/testautomation/service/model/…                    TestJob, TestJobResult, ApiError, …
+api/JobsApi.java + JobsApiController.java + JobsApiDelegate.java      tag Jobs
+api/AgentsApi.java + AgentsApiController.java + AgentsApiDelegate.java tag Agents
+api/ApiUtil.java
+model/…                                                               JobRun, ClaimedJobRun, Agent, …
 ```
+
+| Endpoint | Caller | Returns |
+|---|---|---|
+| `POST /api/v1/jobs` | producer (Jira client, desktop) | `201` `JobRun` + `Location`; optional `Idempotency-Key` header |
+| `GET /api/v1/jobs` | producer / ops | `200` `JobRunPage` (`issueKey`, `status`, `limit`, `offset`) |
+| `GET /api/v1/jobs/{jobRunId}` | producer / ops | `200` `JobRun` (incl. result), `404` |
+| `POST /api/v1/jobs/claim?wait=` | agent | `200` `ClaimedJobRun`, `204` when nothing is claimable |
+| `PUT /api/v1/jobs/{jobRunId}/lease` | agent | `200` `JobRunLease`, `409` lease lost |
+| `POST /api/v1/jobs/{jobRunId}/result` | agent | `200` `JobRunResultAck`, `409` lease lost / already terminal |
+| `POST /api/v1/agents` | agent | `200` `Agent` (upsert on `agentId`) |
+| `GET /api/v1/agents` | ops / desktop | `200` `Array<Agent>` (`status` filter) |
+| `GET /api/v1/agents/{agentId}` | ops / desktop | `200` `Agent`, `404` |
+| `DELETE /api/v1/agents/{agentId}` | agent | `204` (marks it `OFFLINE`) |
 
 ### What you write
 
-Implement the delegate interface and annotate the class as a Spring bean — the generated controller
-wires it up automatically:
+One `@Service` class per delegate interface — the generated controllers wire them up automatically:
 
 ```java
-package ch.mmar.testautomation.service.impl;          // any package below ch.mmar.testautomation.service
+package ch.mmar.testautomation.service.impl;   // any package below ch.mmar.testautomation.service
 
 @Service
 public class JobsApiDelegateImpl implements JobsApiDelegate {
 
     @Override
-    public ResponseEntity<TestJob> claimTestJob(JobClaimRequest request, Integer wait) {
-        return ResponseEntity.noContent().build();     // 204 = nothing to do, agent polls again
-    }
+    public ResponseEntity<JobRun> registerJobRun(JobRunRegistration registration, String idempotencyKey) { … }
 
     @Override
-    public ResponseEntity<TestJobLease> renewTestJobLease(UUID jobId) { … }
+    public ResponseEntity<JobRunPage> listJobRuns(String issueKey, JobRunStatus status, Integer limit, Integer offset) { … }
 
     @Override
-    public ResponseEntity<TestJobResultAck> submitTestJobResult(UUID jobId, TestJobResult result) { … }
+    public ResponseEntity<JobRun> getJobRun(UUID jobRunId) { … }
+
+    @Override
+    public ResponseEntity<ClaimedJobRun> claimJobRun(JobClaimRequest request, Integer wait) { … }
+
+    @Override
+    public ResponseEntity<JobRunLease> renewJobRunLease(UUID jobRunId) { … }
+
+    @Override
+    public ResponseEntity<JobRunResultAck> submitJobRunResult(UUID jobRunId, JobRunResult result) { … }
+}
+
+@Service
+public class AgentsApiDelegateImpl implements AgentsApiDelegate {
+
+    @Override
+    public ResponseEntity<Agent> registerAgent(AgentRegistration registration) { … }
+
+    @Override
+    public ResponseEntity<List<Agent>> listAgents(AgentStatus status) { … }
+
+    @Override
+    public ResponseEntity<Agent> getAgent(String agentId) { … }
+
+    @Override
+    public ResponseEntity<Void> deregisterAgent(String agentId) { … }
 }
 ```
 
 Rules that matter:
 
-- **One bean per delegate interface.** The generated controller uses
-  `@Autowired(required = false)` *without* a `@Qualifier`, so a second `JobsApiDelegate` bean breaks
-  the context; no bean at all is legal and simply yields `501 Not Implemented` on every endpoint.
+- **One class per delegate interface, one bean per class.** `JobsApiDelegate` and `AgentsApiDelegate`
+  each declare their own `default getRequest()`, so a single class implementing both does **not**
+  compile ("inherits unrelated defaults"). And each generated controller uses
+  `@Autowired(required = false)` *without* a `@Qualifier`: a second bean of the same interface breaks
+  the context, no bean at all is legal and yields `501 Not Implemented` everywhere.
 - Add endpoints in the YAML, not in the generated files — regenerating overwrites them (they carry a
   `@Generated` marker and the header `Do not edit the class manually`).
 - Paths must already include `/api/v1`; the generated `@RequestMapping` on the interface reads the
   property `openapi.testautomationService.base-path` (default empty). Leave it empty or the prefix
   is applied twice.
-- The generated controller is a `@Controller`; the interface methods carry the mapping and body
+- The generated controllers are `@Controller`; the interface methods carry the mapping and body
   binding, bean validation is on (`@Valid` request bodies → `400` on violation, verified).
+- **Error bodies are not `ApiError` yet.** Validation and conversion failures are answered by Spring
+  Boot's default error JSON (`{"timestamp":…,"error":"Bad Request",…}`), not by the shape the spec
+  declares. An `@RestControllerAdvice` mapping exceptions to `ApiError` is still missing.
 
-### Verified behaviour (2026-10-12, service jar on port 8080)
+### Verified behaviour (2026-10-13, probes against the service jar on port 8080)
 
-| Request | Without a delegate bean | With a hand-written delegate |
-|---|---|---|
-| `POST /api/v1/jobs/claim?wait=1` | `501` | `204` (no job) |
-| `PUT /api/v1/jobs/{id}/lease` | `501` | `200` + `{"jobId":…,"leaseExpiresAt":…,"heartbeatIntervalSeconds":60}` |
-| `POST /api/v1/jobs/{id}/result` | `501` | `200` + `{"jobId":…,"status":"PASSED","acceptedAt":…}` |
-| `POST /api/v1/jobs/claim` with `{}` (missing required `agentId`) | `400` | `400` |
+| Request | Result |
+|---|---|
+| `POST /api/v1/jobs` with `{"issueKey":"TEST-4711",…}` + `Idempotency-Key` | `201`, `Location` header set, header value reached the delegate |
+| `POST /api/v1/jobs` with `{}` (missing required `issueKey`) | `400` |
+| `GET /api/v1/jobs?issueKey=TEST-4711&status=RUNNING&limit=5&offset=10` | `200`, all four parameters bound (enum included) |
+| `GET /api/v1/jobs?status=BOGUS` | `400` (enum conversion rejected) |
+| `POST /api/v1/jobs/claim?wait=7` + `{"agentId":"agent-01"}` | `200` `ClaimedJobRun` incl. `heartbeatIntervalSeconds` |
+| `PUT …/lease`, `POST …/result` | `200` `JobRunLease`, `200` `JobRunResultAck` with the reported status |
+| `POST /api/v1/agents`, `GET /api/v1/agents?status=STALE`, `GET /api/v1/agents/{id}`, `DELETE …` | `200`, `200`, `200`, `204` |
+
+The probes were temporary (not committed); without any delegate bean every endpoint answers `501`.
 
 ## Layout
 
@@ -119,7 +164,7 @@ mvnw, mvnw.cmd, .mvn/wrapper/                 Maven wrapper (script-only, Maven 
 openapi/testautomation-service.yaml           HTTP contract, source of truth for generated code
 openapi/.openapi-generator-ignore             keeps the generator's sample app out of the output
 service/pom.xml                               testautomation-service module (web + OpenAPI generation)
-service/src/main/java/ch/mmar/testautomation/service/  hand-written code, incl. the delegate impl
+service/src/main/java/ch/mmar/testautomation/service/  hand-written code, incl. the delegate impls
 service/src/main/resources/application.yml
 service/src/test/java/...                     context-load smoke test
 agent/pom.xml                                 testautomation-agent module
@@ -147,16 +192,19 @@ design below is settled.
   which order (Jira client / desktop registering runs, agents claiming and reporting), job identity
   (issue key in, service-generated `jobRunId`; every registration is an independent run), the state
   machine incl. `DEAD`, failure semantics, agent inventory, capability matching and the Jira status
-  push. **Proposal, awaiting review** — the spec has not been changed to match it yet.
+  push. §11 mirrors the spec; §12 lists the semantics still open.
 
 ## Next steps
 
-1. Implement `JobsApiDelegate` in `service/src/main/java/…` (hand-written, survives regeneration) —
-   start with `claimTestJob` returning `204`.
-2. Decide the remaining job-lifecycle details and add `spring-boot-starter-jdbc` + PostgreSQL driver
-   to `service` plus the `jobs` table (Flyway or plain SQL), the claim query, lease and reaper
-   (`docs/postgres-job-queue.md` §7).
-3. Generate the client for `agent` from the same YAML (openapi-generator `java`/`spring` client
-   generator) and add the long-poll loop (`docs/postgres-job-queue.md` §8).
-4. Decide authentication for agents and add the security scheme to the spec — the `401` responses
-   are already declared, nothing enforces them yet.
+1. Implement both delegates in `service/src/main/java/…` (hand-written, survives regeneration) —
+   start with `registerJobRun` + `claimJobRun`, and add the `@RestControllerAdvice` that renders
+   `ApiError`.
+2. Add `spring-boot-starter-jdbc` + PostgreSQL driver to `service`, the `jobs` table (Flyway or plain
+   SQL), the claim query, lease and reaper (`docs/postgres-job-queue.md` §1–§3, §7).
+3. Generate the client for `agent` from the same YAML (openapi-generator client generator) and add
+   the long-poll loop (`docs/postgres-job-queue.md` §8).
+4. Jira push via transactional outbox, and enforce the role model (`docs/service-api-sequences.md`
+   §9, §10).
+5. Settle the open semantics in `docs/service-api-sequences.md` §12 (what determines the test to run,
+   registration retry safety, Jira representation of several runs, liveness, cancellation, releasing
+   a claimed run, per-run runtime limit, issue-key validation, error shape).

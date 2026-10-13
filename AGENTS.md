@@ -43,7 +43,9 @@ java -jar agent/target/testautomation-agent-0.1.0-SNAPSHOT.jar
 ```
 
 Toolchain on the Hermes VM: JDK 21 at `/opt/data/tools/jdk-21`, Maven at
-`/opt/data/tools/maven-3.9.9` (both already on `PATH`). `./mvnw` also works with no local Maven.
+`/opt/data/tools/maven-3.9.9` (both already on `PATH` for interactive shells). `./mvnw` also works
+with no local Maven. In a **non-interactive/background** shell `java` is not on `PATH` — call the
+absolute path `/opt/data/tools/jdk-21/bin/java` there.
 
 ## Critical Gotchas
 
@@ -57,9 +59,15 @@ Toolchain on the Hermes VM: JDK 21 at `/opt/data/tools/jdk-21`, Maven at
   is produced by openapi-generator from `openapi/testautomation-service.yaml` on every build. Change
   the YAML, regenerate (`./mvnw -pl service generate-sources`), and check the result compiles.
   Hand-written code goes in `service/src/main/java/…` only; nothing is generated there.
-- **One `JobsApiDelegate` bean, no `@Qualifier`.** The generated controller injects the delegate with
-  `@Autowired(required = false)` and falls back to a default that answers `501`. No bean = a service
-  that starts and answers `501` everywhere; two beans = context startup failure.
+- **One class per delegate interface, one bean per class.** There are two delegates now
+  (`JobsApiDelegate` for tag `Jobs`, `AgentsApiDelegate` for tag `Agents`). Both declare their own
+  `default getRequest()`, so a class implementing both does not compile ("inherits unrelated
+  defaults for getRequest()"). Each generated controller injects its delegate with
+  `@Autowired(required = false)` and no `@Qualifier`: a second bean of the same interface breaks the
+  context, no bean is legal and answers `501` on every endpoint.
+- **Error responses are still Spring Boot's default shape**, not the `ApiError` the spec declares —
+  an `@RestControllerAdvice` is missing. Do not assume the generated `ApiError` model reaches clients
+  yet.
 - **Do not set `openapi.testautomationService.base-path`** — the spec paths already start with
   `/api/v1`, the property only adds a prefix.
 - **`openapi/.openapi-generator-ignore` is load-bearing.** It keeps the generator's sample app, its

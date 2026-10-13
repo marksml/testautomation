@@ -1,8 +1,15 @@
 # Service API — semantics and request sequence
 
-**Status: proposal, awaiting review.** Product-owner decisions are folded in; the OpenAPI spec
-(`openapi/testautomation-service.yaml`) is **not** changed yet. Once the open points in §12 are
-settled, the spec is extended and this file becomes the description of the implemented behaviour.
+**Status: the API surface below is implemented in `openapi/testautomation-service.yaml`** and
+generated from there (the endpoints answer `501` until a delegate implementation exists). The
+*semantics* still marked open in §12 are proposals — they describe behaviour the service is meant to
+have, not behaviour that exists. If this file and the spec disagree, the spec wins for the wire
+format and this file for the intent; a disagreement is a bug in one of them.
+
+**Rev 3** — validated against the required API surface and extended in two places: the result
+acceptance rule is now exact (lease holder + terminal-state handling, §5/§7) and the spec-impact list
+in §11 turned into the contract that is **now implemented** in `openapi/testautomation-service.yaml`
+(the semantics still marked open in §12 remain proposals).
 
 **Rev 2** — registration identity corrected: a registration carries the **issue key only**, the
 service creates a **`jobRunId`**, and every registration is an **independent run**. The
@@ -59,7 +66,7 @@ so a caller that wants retry safety can have it without changing the semantics f
 |---|---|---|
 | `POST` | `/api/v1/jobs` | Register a run. Body: `issueKey`, `parameters{}`, `requiresCapabilities[]`, `priority`, `maxAttempts`. Always creates a run → `201` + `{jobRunId, issueKey, status, createdAt}`. |
 | `GET` | `/api/v1/jobs/{jobRunId}` | State and, when finished, the result of one run. |
-| `GET` | `/api/v1/jobs` | List runs, filter by `issueKey`, `status`, `limit`. An issue can have several runs, so this is what answers "what happened with TEST-4711?". |
+| `GET` | `/api/v1/jobs` | List runs, filter by `issueKey` and `status`, paged with `limit`/`offset`. An issue can have several runs, so this is what answers "what happened with TEST-4711?". |
 | `DELETE` | `/api/v1/jobs/{jobRunId}` | Cancel a queued or running run — not requested yet, §12.5. |
 
 ### 3.2 Agent API (test agents)
@@ -122,9 +129,19 @@ answers `204`; the agent immediately calls again (see `postgres-job-queue.md` §
 ```
 
 - **Per run**, not per issue: two runs of `TEST-4711` have completely separate states.
-- **First terminal result wins.** After a lease expiry the run is re-queued as a new attempt; if the
-  old agent reports late, that result is rejected (`409`) — the run may already be terminal, and a
-  second result would corrupt its Jira update.
+- **A result is accepted only from the agent currently holding the lease of that run**, and only while
+  the run is not yet terminal (`SUCCEEDED`, `FAILED`, `ERROR`, `SKIPPED`, `CANCELLED`, `DEAD` are all
+  terminal):
+  - lease holder + run not terminal → accepted; the run becomes terminal and the outbox row is written
+    in the same commit;
+  - lease holder + run already terminal with the **same** status → `200` and the same ack (a network
+    retry of an identical submission must not fail);
+  - lease holder + run already terminal with a **different** status → `409 ALREADY_TERMINAL`;
+  - **not** the lease holder (lease expired and was reclaimed, i.e. a superseded attempt) → `409
+    LEASE_LOST`.
+
+  The distinction matters: a late result of a superseded attempt must never update Jira a second
+  time, while a simple retry of the same result must be harmless.
 - `DEAD` is a first-class status: returned by `GET /api/v1/jobs/{jobRunId}`, included in list results,
   and pushed to Jira. Terminal — another execution means another registration.
 
@@ -144,8 +161,8 @@ answers `204`; the agent immediately calls again (see `postgres-job-queue.md` §
 | Claim response lost in transit | The run is already leased; the agent never saw it. After lease expiry the reaper re-queues it with `attempt++`. Unavoidable — **every execution must be safe to repeat**. |
 | Agent crashes mid-test | Same: lease expires, `attempt++`, another agent runs that run. |
 | Agent stalls but is alive | Heartbeat keeps the lease; no heartbeat → reclaimed. |
-| Result of a superseded attempt arrives late | `409`; the first terminal result wins, the Jira update is not touched again. |
-| Result POST retried after a network error | Idempotent per `jobRunId`: the second call returns the same ack for the same status. |
+| Result of a superseded attempt arrives late | `409 LEASE_LOST`; the run's Jira update is not touched again. |
+| Result POST retried after a network error | Same lease holder, same status, run already terminal → `200` with the same ack. `409 ALREADY_TERMINAL` only when the status differs. |
 | Producer retries a registration (e.g. Jira webhook redelivery) | **Creates a second run** — by design. Opt in to `Idempotency-Key` if a producer needs retry safety (§12.2). |
 | Run exhausts `maxAttempts` | `DEAD`, terminal, pushed to Jira. |
 | Service restart | Nothing to recover — all state is in PostgreSQL. |
@@ -164,6 +181,9 @@ agents database access.
   - `ACTIVE` — seen within the liveness window (`2 × wait` + margin, e.g. 90 s).
   - `STALE` — not seen within that window; visibly unhealthy, still claimable in theory.
   - `OFFLINE` — explicit `DELETE /api/v1/agents/{agentId}` on graceful shutdown.
+- **Deregistration does not cancel running runs.** An agent that shuts down while holding runs leaves
+  their leases to expire and the reaper re-queues them (`attempt++`). A graceful agent should finish
+  or abandon its runs first; an explicit "give this run back" call does not exist yet (§12.7).
 - **Concurrency** (`maxJobs`) is enforced server-side at claim time by counting the agent's active
   leases — the agent cannot see the queue, so the service is the only place that can be sure.
 - Optional: the desktop component reads `GET /api/v1/agents` for an ops view. Whether a dedicated
@@ -204,22 +224,47 @@ them:
 The mechanism (static bearer tokens per role, mTLS, something else) is not decided; the spec's `401`
 responses are already declared but nothing enforces them.
 
-## 11. Impact on the current OpenAPI spec
+## 11. The OpenAPI spec (now implemented)
 
-Once the open points are settled, the spec changes to:
+`openapi/testautomation-service.yaml` contains this API surface. It generates two delegate
+interfaces, one per tag, each satisfied by exactly one bean: `JobsApiDelegate` (tag `Jobs`) and
+`AgentsApiDelegate` (tag `Agents`).
 
-- `POST /api/v1/jobs` — registration by `issueKey` only; always creates a run and returns `jobRunId`.
-- `GET /api/v1/jobs/{jobRunId}` — status/result incl. `DEAD`.
-- `GET /api/v1/jobs` — list/filter by `issueKey` and `status` (an issue can have several runs).
-- `POST /api/v1/agents`, `GET /api/v1/agents`, `GET /api/v1/agents/{agentId}`,
-  `DELETE /api/v1/agents/{agentId}` — inventory.
-- `TestJob` gains `jobRunId` (path identity), `heartbeatIntervalSeconds` (so the agent knows the
-  cadence right after claiming, not only after the first renewal) and `requiresCapabilities[]`;
-  `testCaseRef` replaces the old `testCaseId`/`testCaseName`/`tags` mix (see §12.1).
-- `JobClaimRequest` shrinks to `{agentId}`; capabilities move to the agent registration.
-- Run status enum: `QUEUED | RUNNING | SUCCEEDED | FAILED | ERROR | SKIPPED | CANCELLED | DEAD`;
-  result status stays `PASSED | FAILED | ERROR | SKIPPED | CANCELLED`. New `ApiError` codes:
-  `ALREADY_TERMINAL`, `LEASE_LOST`, `AGENT_UNKNOWN`.
+**Producer / reader** — tag `Jobs`:
+
+| Endpoint | Request | Response |
+|---|---|---|
+| `POST /api/v1/jobs` | `JobRunRegistration` (`issueKey` required; `testCaseRef`, `parameters`, `requiresCapabilities`, `priority`, `maxAttempts` optional) + optional `Idempotency-Key` header | `201` `JobRun` |
+| `GET /api/v1/jobs` | `issueKey`, `status`, `limit`, `offset` | `200` `JobRunPage` |
+| `GET /api/v1/jobs/{jobRunId}` | — | `200` `JobRun` (incl. `result` when terminal), `404` |
+
+**Agent** — tags `Jobs` / `Agents`:
+
+| Endpoint | Request | Response |
+|---|---|---|
+| `POST /api/v1/agents` | `AgentRegistration` | `200` `Agent` |
+| `GET /api/v1/agents` | `status` filter | `200` `Array<Agent>` |
+| `GET /api/v1/agents/{agentId}` | — | `200` `Agent`, `404` |
+| `DELETE /api/v1/agents/{agentId}` | — | `204` |
+| `POST /api/v1/jobs/claim` | `wait` (query), `JobClaimRequest` | `200` `ClaimedJobRun`, `204` (nothing available) |
+| `PUT /api/v1/jobs/{jobRunId}/lease` | — | `200` `JobRunLease`, `409` `LEASE_LOST` |
+| `POST /api/v1/jobs/{jobRunId}/result` | `JobRunResult` | `200` `JobRunResultAck`, `409` `LEASE_LOST` / `ALREADY_TERMINAL` |
+
+Models: `JobRunRegistration`, `JobRun`, `JobRunSummary`, `JobRunPage`, `JobClaimRequest`,
+`ClaimedJobRun`, `JobRunLease`, `JobRunResult`, `JobRunResultAck`, `TestArtifact`,
+`AgentRegistration`, `Agent`, `ApiError`; enums `JobRunStatus` (`QUEUED | RUNNING | SUCCEEDED |
+FAILED | ERROR | SKIPPED | CANCELLED | DEAD`), `TestResultStatus` (`PASSED | FAILED | ERROR |
+SKIPPED | CANCELLED`), `AgentStatus` (`ACTIVE | STALE | OFFLINE`).
+
+Deliberately **not** in the spec, with the reason:
+
+- `bearerAuth` is declared as the security scheme but nothing enforces it — the role model of §10 is
+  not implemented yet, and only the `401` responses are contractual today.
+- `testCaseRef` is optional in the registration because §12.1 is open.
+- `DELETE /api/v1/jobs/{jobRunId}` (cancel) — not requested, §12.5.
+- release/abandon a claimed run — §12.7.
+- per-run maximum runtime — §12.8.
+- issue-key validation against Jira — §12.9.
 
 ## 12. Open points (need a decision)
 
@@ -238,3 +283,19 @@ Once the open points are settled, the spec changes to:
    runs of an issue".
 6. **Where testautomation-desktop lives** — third root folder in this repository (`desktop/`, which
    stack?), or a separate repository? That decides whether we generate a client module here.
+7. **Releasing a claimed run** — an agent that cannot execute a claimed run today has only two
+   options: let the lease expire (wasting the lease window) or submit a failure that counts as an
+   attempt. Should there be an explicit "give this run back" call that re-queues it without counting
+   an attempt (e.g. a missing dependency on that agent)?
+8. **Per-run maximum runtime** — nothing stops a hung agent that keeps heartbeating from holding a
+   run indefinitely. Is a maximum runtime (or a runtime hint at claim time) needed?
+9. **Issue-key validation on registration** — does `POST /api/v1/jobs` verify the issue against Jira
+   (`404 ISSUE_UNKNOWN`), or accept any key and let the Jira push fail later?
+10. **Error response shape** — the spec declares `ApiError` for `400`/`401`/`404`/`409`, but Spring
+    Boot's default error JSON is what clients actually receive today. A `@RestControllerAdvice`
+    mapping exceptions to `ApiError` has to be part of the delegate implementation, or the spec
+    should stop promising that shape.
+11. **Generated delegates cannot be merged** — `JobsApiDelegate` and `AgentsApiDelegate` each declare
+    `default getRequest()`, so one class cannot implement both (compile error). Accept two small
+    delegate classes, or re-tag the API so a single `Api` interface carries everything and one class
+    implements it.

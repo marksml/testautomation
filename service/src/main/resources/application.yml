@@ -1,3 +1,10 @@
 spring:
   application:
     name: testautomation-service
+
+# Where producers (Jira client, desktop) and agents reach this service; in production it sits behind
+# a TLS reverse proxy. Stated explicitly instead of relying on Spring Boot's default so the port is
+# visible next to the application it belongs to. Override per run with --server.port=<port> or the
+# SERVER_PORT environment variable (command line wins over this file).
+server:
+  port: 8080

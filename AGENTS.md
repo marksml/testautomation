@@ -65,9 +65,11 @@ absolute path `/opt/data/tools/jdk-21/bin/java` there.
   defaults for getRequest()"). Each generated controller injects its delegate with
   `@Autowired(required = false)` and no `@Qualifier`: a second bean of the same interface breaks the
   context, no bean is legal and answers `501` on every endpoint.
-- **Error responses are still Spring Boot's default shape**, not the `ApiError` the spec declares —
-  an `@RestControllerAdvice` is missing. Do not assume the generated `ApiError` model reaches clients
-  yet.
+- **Error responses are still Spring Boot's default shape**, not the `ApiError` the spec declares.
+  Worse, the delegate *cannot* produce that body itself: every method returns
+  `ResponseEntity<JobRun>` (or another success model), so an error payload has to come from a thrown
+  exception handled by a `@RestControllerAdvice`. Verified: the delegated `400`/`503` paths answered
+  with an empty body.
 - **Do not set `openapi.testautomationService.base-path`** — the spec paths already start with
   `/api/v1`, the property only adds a prefix.
 - **`openapi/.openapi-generator-ignore` is load-bearing.** It keeps the generator's sample app, its

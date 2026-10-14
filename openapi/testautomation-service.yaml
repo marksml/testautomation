@@ -19,6 +19,12 @@ info:
     `docs/service-api-sequences.md` (endpoint contract) and `docs/postgres-job-queue.md` (queue
     mechanics, lease/reaper, idle behaviour). Change this file, not the generated code.
 
+    **Two kinds of run, distinguished implicitly by the registration payload:** with an `issueKey`
+    the run belongs to Jira — the service fetches the test details from Jira and pushes the result
+    back to Jira; without an `issueKey` and with a `testName` it is an ad-hoc run (testautomation-
+    desktop, a curl call) that never touches Jira and whose result is only readable through this
+    API. On the way out the distinction is explicit: every run carries a derived `source` field.
+
     Status: the endpoints exist and are routed; they answer `501 Not Implemented` until a delegate
     implementation is provided. Authentication is declared but not enforced.
   contact:
@@ -49,12 +55,25 @@ paths:
     post:
       tags: [Jobs]
       operationId: registerJobRun
-      summary: Register a job run for a Jira issue
+      summary: Register a job run
       description: |
-        Creates a **new, independent run**: the client sends the issue key, the service generates
-        the `jobRunId` and returns it. Registering the same issue key twice produces two runs, both
-        executed — there is no de-duplication and no overwrite. Each run is pushed to Jira on its
-        own as soon as it finishes, regardless of which run of that issue finishes last.
+        Creates a **new, independent run**: the service generates the `jobRunId` and returns it.
+        Registering the same payload twice produces two runs, both executed — there is no
+        de-duplication and no overwrite.
+
+        **Which kind of run is created is decided implicitly by the payload:**
+
+        * `issueKey` set → **Jira-backed run** (`source: JIRA`). The service fetches the details it
+          needs from the Jira REST API, and pushes the result back to Jira when the run finishes.
+          Whether the caller is the Jira client or a curl call does not matter — what matters is
+          that the details live in Jira.
+        * `issueKey` empty, `testName` set → **ad-hoc run** (`source: AD_HOC`). Nothing is fetched
+          from Jira and nothing is pushed to Jira; the result is only readable through
+          `GET /api/v1/jobs` (the desktop component polls, it is not notified actively).
+        * neither set → `400`.
+
+        Each finished run is pushed to Jira on its own, regardless of which run of that issue
+        finishes last.
       parameters:
         - name: Idempotency-Key
           in: header
@@ -88,6 +107,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '503':
+          $ref: '#/components/responses/JiraUnavailable'
 
     get:
       tags: [Jobs]
@@ -428,6 +449,14 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ApiError'
+    JiraUnavailable:
+      description: |
+        Jira could not be reached to resolve a Jira-backed run. The registration was not created —
+        the caller may retry (see `docs/service-api-sequences.md` §12.9).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
     JobRunNotFound:
       description: No run with this identifier.
       content:
@@ -445,20 +474,25 @@ components:
 
     JobRunRegistration:
       type: object
-      description: What a producer sends to register one run of a Jira issue.
-      required: [issueKey]
+      description: |
+        What a producer sends to register one run. `issueKey` and `testName` decide the kind of run
+        (see `docs/service-api-sequences.md` §2): an issue key means the details come from Jira, a
+        test name alone means an ad-hoc run.
       properties:
         issueKey:
           type: string
-          description: Jira issue the run belongs to. Several runs may exist per issue.
+          description: |
+            Jira issue the run belongs to. Set it when the test details live in Jira: the service
+            fetches them itself and pushes the result back to Jira. Several runs may exist per
+            issue. Omit it for an ad-hoc run started by the desktop component or a curl call.
           example: TEST-4711
-        testCaseRef:
+        testName:
           type: string
           description: |
-            Optional reference to the test case to execute. Omitted when the issue key alone
-            determines what runs — whether that mapping exists, or whether every producer must name
-            a test, is still open (`docs/service-api-sequences.md` §12.1).
-          example: TC-LOGIN-002
+            Name of the test to execute. Required when `issueKey` is absent. For a Jira-backed run
+            the service resolves the test from Jira — sending a name as well is allowed as a
+            refinement and is recorded on the run.
+          example: login-smoke
         parameters:
           type: object
           additionalProperties:
@@ -487,6 +521,14 @@ components:
             How many attempts this run may consume before it becomes `DEAD`. Omitted → the service
             applies its own default.
 
+    JobRunSource:
+      type: string
+      description: |
+        Where the run's test definition comes from, derived from the registration (never sent by a
+        client): `JIRA` = fetched from Jira, result pushed back to Jira; `AD_HOC` = started directly
+        against the service, no Jira contact at all.
+      enum: [JIRA, AD_HOC]
+
     JobRunStatus:
       type: string
       description: |
@@ -502,16 +544,21 @@ components:
     JobRunSummary:
       type: object
       description: One run in a list response.
-      required: [jobRunId, issueKey, status, attempt, createdAt]
+      required: [jobRunId, source, status, attempt, createdAt]
       properties:
         jobRunId:
           type: string
           format: uuid
+        source:
+          $ref: '#/components/schemas/JobRunSource'
         issueKey:
           type: string
+          description: Present only for Jira-backed runs.
           example: TEST-4711
-        testCaseRef:
+        testName:
           type: string
+          description: For ad-hoc runs the test that was requested; for Jira-backed runs the name
+            resolved from Jira, if any.
         status:
           $ref: '#/components/schemas/JobRunStatus'
         attempt:
@@ -537,16 +584,21 @@ components:
     JobRun:
       type: object
       description: Full state of one run, including its result once it is terminal.
-      required: [jobRunId, issueKey, status, attempt, createdAt]
+      required: [jobRunId, source, status, attempt, createdAt]
       properties:
         jobRunId:
           type: string
           format: uuid
+        source:
+          $ref: '#/components/schemas/JobRunSource'
         issueKey:
           type: string
+          description: Present only for Jira-backed runs.
           example: TEST-4711
-        testCaseRef:
+        testName:
           type: string
+          description: For ad-hoc runs the test that was requested; for Jira-backed runs the name
+            resolved from Jira, if any.
         status:
           $ref: '#/components/schemas/JobRunStatus'
         attempt:
@@ -607,14 +659,17 @@ components:
       description: |
         Everything the agent needs to execute the run. Self-contained on purpose: an agent has no
         database access and must not have to look anything up elsewhere.
-      required: [jobRunId, issueKey, attempt, leaseExpiresAt, heartbeatIntervalSeconds]
+      required: [jobRunId, source, attempt, leaseExpiresAt, heartbeatIntervalSeconds]
       properties:
         jobRunId:
           type: string
           format: uuid
+        source:
+          $ref: '#/components/schemas/JobRunSource'
         issueKey:
           type: string
-        testCaseRef:
+          description: Present only for Jira-backed runs.
+        testName:
           type: string
         parameters:
           type: object
@@ -801,8 +856,8 @@ components:
       type: object
       description: |
         Error payload. Codes in use: `VALIDATION_FAILED`, `LEASE_LOST`, `ALREADY_TERMINAL`,
-        `AGENT_UNKNOWN`, `JOB_RUN_UNKNOWN`. An RFC 7807 `ProblemDetail` shape is the likely
-        alternative once the error-handling convention is fixed.
+        `AGENT_UNKNOWN`, `JOB_RUN_UNKNOWN`, `JIRA_UNAVAILABLE`. An RFC 7807 `ProblemDetail` shape is
+        the likely alternative once the error-handling convention is fixed.
       required: [status, message]
       properties:
         status:

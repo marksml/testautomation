@@ -38,19 +38,48 @@ Two consequences follow from "no database access for the clients":
 ## 2. Identity: one registration = one independent run
 
 ```
-POST /api/v1/jobs   { issueKey: "TEST-4711", parameters: { … } }
-   → 201 { jobRunId: "9f1c…", issueKey: "TEST-4711", status: "QUEUED", createdAt: … }
+POST /api/v1/jobs   { issueKey: "TEST-4711", parameters: { … } }        → Jira-backed run
+POST /api/v1/jobs   { testName: "login-smoke", parameters: { … } }      → ad-hoc run
+   → 201 { jobRunId: "9f1c…", source: "JIRA" | "AD_HOC", status: "QUEUED", createdAt: … }
 ```
 
-- The client sends the **issue key only** (plus parameters). It does not choose an execution id.
+- The client sends the **issue key or the test name** (plus parameters). It does not choose an
+  execution id.
 - The service generates a **`jobRunId`** (UUID) per registration. That id is the wire identity of the
   run: the agent receives it at claim time and uses it for lease renewal and result submission.
-- **Registration is deliberately not idempotent.** Two calls with the same `issueKey` produce two
+- **Which kind of run is created is decided implicitly by the payload** — no client-type field, no
+  separate endpoint (§2.1).
+- **Registration is deliberately not idempotent.** Two calls with the same payload produce two
   distinct runs, and both are executed. No dedupe, no overwrite, no generation counter.
-- Runs of the same issue are **fully independent**: separate queue rows, leases, attempts and results.
-  They execute in any order and finish in any order.
-- The service pushes each run's result to Jira **as soon as that run is finished** — it does not wait
-  for sibling runs of the same issue and does not care which one finishes last.
+- Runs are **fully independent**: separate queue rows, leases, attempts and results. They execute in
+  any order and finish in any order.
+- For a Jira-backed run, the service pushes the result to Jira **as soon as that run is finished** —
+  it does not wait for sibling runs of the same issue and does not care which one finishes last.
+  Ad-hoc runs never reach Jira at all.
+
+### 2.1 Two sources, distinguished implicitly
+
+| Registration payload | Source | Test definition | Result |
+|---|---|---|---|
+| `issueKey` set (with or without `testName`) | `JIRA` | the service fetches it from Jira via REST | pushed to Jira when the run finishes |
+| `issueKey` empty, `testName` set | `AD_HOC` | taken from `testName` | **nowhere** — only readable through `GET /api/v1/jobs` |
+| neither | — | — | `400` |
+
+Notes:
+
+- The caller's identity (Jira client, desktop, a `curl` invocation by hand) is irrelevant: what
+  decides is whether the details live in Jira. A curl call with an `issueKey` is a Jira-backed run.
+- `testName` may also be sent *together with* an `issueKey`; it then acts as a refinement/record of
+  which test within the issue is meant, while the service still resolves the details from Jira.
+- On the way **out** the distinction is explicit: every run, claim response and list entry carries a
+  derived `source` field, so an agent and the desktop can always tell where a run came from.
+- An agent never talks to Jira (it has no credentials and no network path for that); Jira-derived
+  details are materialised into the run by the service and travel in the claim response.
+- The `neither set → 400` rule is enforced by the **service**, not by the generated layer: OpenAPI
+  cannot express "exactly one of these two fields". The generated models accept an empty
+  registration; the delegate has to reject it.
+- What exactly the service fetches from Jira, and how those fields map to the run's parameters and
+  test definition, is still open (§12.1 / §12.9).
 
 What this costs, stated plainly: a producer that retries a registration whose response it never saw
 creates a second run. For Jira webhooks (at-least-once on their side) that is a real hazard.
@@ -64,7 +93,7 @@ so a caller that wants retry safety can have it without changing the semantics f
 
 | Method | Path | Semantics |
 |---|---|---|
-| `POST` | `/api/v1/jobs` | Register a run. Body: `issueKey`, `parameters{}`, `requiresCapabilities[]`, `priority`, `maxAttempts`. Always creates a run → `201` + `{jobRunId, issueKey, status, createdAt}`. |
+| `POST` | `/api/v1/jobs` | Register a run. Body: `issueKey` (Jira-backed) **or** `testName` (ad-hoc), plus `parameters{}`, `requiresCapabilities[]`, `priority`, `maxAttempts`. Always creates a run → `201` + `{jobRunId, source, status, createdAt}`; `503` if a Jira-backed run cannot be resolved from Jira. |
 | `GET` | `/api/v1/jobs/{jobRunId}` | State and, when finished, the result of one run. |
 | `GET` | `/api/v1/jobs` | List runs, filter by `issueKey` and `status`, paged with `limit`/`offset`. An issue can have several runs, so this is what answers "what happened with TEST-4711?". |
 | `DELETE` | `/api/v1/jobs/{jobRunId}` | Cancel a queued or running run — not requested yet, §12.5. |
@@ -194,6 +223,9 @@ agents database access.
 The service pushes results to Jira's REST API; clients never do this themselves, and the Jira client
 never has to ask.
 
+- **Only for Jira-backed runs** (`source: JIRA`). Ad-hoc runs registered by the desktop component or
+  a curl call are never pushed anywhere — their result exists only in the service's database and is
+  read back through `GET /api/v1/jobs` (§3.1). Nobody is notified actively.
 - **Per run, as soon as it is available.** No aggregation per issue, no waiting for sibling runs, no
   assumption about order: the run that finishes first is pushed first.
 - **The update must identify the run**: `jobRunId`, `issueKey`, `attempt`, `startedAt`/`finishedAt`,
@@ -234,7 +266,7 @@ interfaces, one per tag, each satisfied by exactly one bean: `JobsApiDelegate` (
 
 | Endpoint | Request | Response |
 |---|---|---|
-| `POST /api/v1/jobs` | `JobRunRegistration` (`issueKey` required; `testCaseRef`, `parameters`, `requiresCapabilities`, `priority`, `maxAttempts` optional) + optional `Idempotency-Key` header | `201` `JobRun` |
+| `POST /api/v1/jobs` | `JobRunRegistration` (`issueKey` **or** `testName`; `parameters`, `requiresCapabilities`, `priority`, `maxAttempts` optional) + optional `Idempotency-Key` header | `201` `JobRun`, `503` if Jira cannot resolve a Jira-backed run |
 | `GET /api/v1/jobs` | `issueKey`, `status`, `limit`, `offset` | `200` `JobRunPage` |
 | `GET /api/v1/jobs/{jobRunId}` | — | `200` `JobRun` (incl. `result` when terminal), `404` |
 
@@ -252,9 +284,11 @@ interfaces, one per tag, each satisfied by exactly one bean: `JobsApiDelegate` (
 
 Models: `JobRunRegistration`, `JobRun`, `JobRunSummary`, `JobRunPage`, `JobClaimRequest`,
 `ClaimedJobRun`, `JobRunLease`, `JobRunResult`, `JobRunResultAck`, `TestArtifact`,
-`AgentRegistration`, `Agent`, `ApiError`; enums `JobRunStatus` (`QUEUED | RUNNING | SUCCEEDED |
-FAILED | ERROR | SKIPPED | CANCELLED | DEAD`), `TestResultStatus` (`PASSED | FAILED | ERROR |
-SKIPPED | CANCELLED`), `AgentStatus` (`ACTIVE | STALE | OFFLINE`).
+`AgentRegistration`, `Agent`, `ApiError`; enums `JobRunSource` (`JIRA | AD_HOC`), `JobRunStatus`
+(`QUEUED | RUNNING | SUCCEEDED | FAILED | ERROR | SKIPPED | CANCELLED | DEAD`), `TestResultStatus`
+(`PASSED | FAILED | ERROR | SKIPPED | CANCELLED`), `AgentStatus` (`ACTIVE | STALE | OFFLINE`).
+`JobRun`, `JobRunSummary` and `ClaimedJobRun` all carry the derived `source`; `issueKey` is optional
+in all three because ad-hoc runs have none.
 
 Deliberately **not** in the spec, with the reason:
 
@@ -268,10 +302,10 @@ Deliberately **not** in the spec, with the reason:
 
 ## 12. Open points (need a decision)
 
-1. **What defines "which test to run"?** Registration carries only the issue key and parameters. If a
-   Jira issue *is* the test case (or maps 1:1 through a convention), the service resolves the test
-   from the issue key and no test reference is needed. If the desktop component should also start
-   *arbitrary* tests, it needs a test reference (e.g. `testCaseRef`) in the registration. Which is it?
+1. **What the service fetches from Jira, and how it maps to the run.** The decision that an
+   `issueKey` means "resolve the details from Jira" is taken; which Jira fields are read, and how
+   they become the run's parameters and test definition (so that the claim response is complete for a
+   DB-less agent), is still open.
 2. **Registration retry safety** — accept the duplicate-run risk for the Jira webhook, or support the
    optional `Idempotency-Key` header for producers that want it?
 3. **Jira push scope and representation** — terminal states + `DEAD` only, or also `QUEUED`/`RUNNING`?
@@ -289,13 +323,22 @@ Deliberately **not** in the spec, with the reason:
    an attempt (e.g. a missing dependency on that agent)?
 8. **Per-run maximum runtime** — nothing stops a hung agent that keeps heartbeating from holding a
    run indefinitely. Is a maximum runtime (or a runtime hint at claim time) needed?
-9. **Issue-key validation on registration** — does `POST /api/v1/jobs` verify the issue against Jira
-   (`404 ISSUE_UNKNOWN`), or accept any key and let the Jira push fail later?
+9. **Jira enrichment on registration** — when is it fetched (at registration, i.e. fail fast, or
+   lazily at claim time?), and what happens when Jira rejects the key or is unreachable? Current
+   proposal in the spec: fetch at registration, answer `503 JIRA_UNAVAILABLE`, create no run, let the
+   caller retry.
 10. **Error response shape** — the spec declares `ApiError` for `400`/`401`/`404`/`409`, but Spring
     Boot's default error JSON is what clients actually receive today. A `@RestControllerAdvice`
     mapping exceptions to `ApiError` has to be part of the delegate implementation, or the spec
-    should stop promising that shape.
+    should stop promising that shape. Note that the delegate **cannot** produce the body itself: its
+    return type is `ResponseEntity<JobRun>`, so the payload has to come from a thrown exception.
 11. **Generated delegates cannot be merged** — `JobsApiDelegate` and `AgentsApiDelegate` each declare
     `default getRequest()`, so one class cannot implement both (compile error). Accept two small
     delegate classes, or re-tag the API so a single `Api` interface carries everything and one class
     implements it.
+12. **Incremental reads for the desktop** — the desktop polls instead of being notified, so it needs
+    "everything that changed since X". Should `GET /api/v1/jobs` get an `updatedSince` filter (needs
+    an `updated_at` column and index) rather than re-reading the whole table?
+13. **"Jira details, but no push"** — the implicit discrimination cannot express it. If the desktop
+    ever starts a Jira-backed run that must *not* comment in Jira, we need an explicit override flag;
+    until then, ad-hoc is the only way to stay silent.

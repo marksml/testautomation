@@ -67,7 +67,7 @@ model/…                                                               JobRun, 
 
 | Endpoint | Caller | Returns |
 |---|---|---|
-| `POST /api/v1/jobs` | producer (Jira client, desktop) | `201` `JobRun` + `Location`; optional `Idempotency-Key` header |
+| `POST /api/v1/jobs` | producer (Jira client, desktop, curl) | `201` `JobRun` (`source: JIRA` with an `issueKey`, `AD_HOC` with a `testName` alone) + `Location`; optional `Idempotency-Key` header; `503` if Jira cannot resolve a Jira-backed run |
 | `GET /api/v1/jobs` | producer / ops | `200` `JobRunPage` (`issueKey`, `status`, `limit`, `offset`) |
 | `GET /api/v1/jobs/{jobRunId}` | producer / ops | `200` `JobRun` (incl. result), `404` |
 | `POST /api/v1/jobs/claim?wait=` | agent | `200` `ClaimedJobRun`, `204` when nothing is claimable |
@@ -138,23 +138,30 @@ Rules that matter:
   is applied twice.
 - The generated controllers are `@Controller`; the interface methods carry the mapping and body
   binding, bean validation is on (`@Valid` request bodies → `400` on violation, verified).
-- **Error bodies are not `ApiError` yet.** Validation and conversion failures are answered by Spring
-  Boot's default error JSON (`{"timestamp":…,"error":"Bad Request",…}`), not by the shape the spec
-  declares. An `@RestControllerAdvice` mapping exceptions to `ApiError` is still missing.
+- **Error bodies are not `ApiError` yet — and the delegate cannot make them.** Validation and
+  conversion failures are answered by Spring Boot's default error JSON
+  (`{"timestamp":…,"error":"Bad Request",…}`), not by the shape the spec declares. Every delegate
+  method returns a success model (`ResponseEntity<JobRun>`), so an `ApiError` body has to come from a
+  thrown exception handled by an `@RestControllerAdvice` — which is still missing.
 
-### Verified behaviour (2026-10-13, probes against the service jar on port 8080)
+### Verified behaviour (2026-10-14, temporary probes against the service jar on port 8080)
 
 | Request | Result |
 |---|---|
-| `POST /api/v1/jobs` with `{"issueKey":"TEST-4711",…}` + `Idempotency-Key` | `201`, `Location` header set, header value reached the delegate |
-| `POST /api/v1/jobs` with `{}` (missing required `issueKey`) | `400` |
+| `POST /api/v1/jobs` with `{"issueKey":"TEST-4711",…}` + `Idempotency-Key` | `201`, `source: JIRA`, `Location` header set, header value reached the delegate |
+| `POST /api/v1/jobs` with `{"testName":"login-smoke"}` | `201`, `source: AD_HOC`, no `issueKey` in the response |
+| `POST /api/v1/jobs` with `issueKey` **and** `testName` | `201`, `source: JIRA`, `testName` recorded on the run |
+| `POST /api/v1/jobs` with neither field | `400` — enforced by the delegate; the generated models do not reject it |
+| `POST /api/v1/jobs` for a run whose Jira lookup fails | `503`, no run created |
 | `GET /api/v1/jobs?issueKey=TEST-4711&status=RUNNING&limit=5&offset=10` | `200`, all four parameters bound (enum included) |
 | `GET /api/v1/jobs?status=BOGUS` | `400` (enum conversion rejected) |
 | `POST /api/v1/jobs/claim?wait=7` + `{"agentId":"agent-01"}` | `200` `ClaimedJobRun` incl. `heartbeatIntervalSeconds` |
 | `PUT …/lease`, `POST …/result` | `200` `JobRunLease`, `200` `JobRunResultAck` with the reported status |
 | `POST /api/v1/agents`, `GET /api/v1/agents?status=STALE`, `GET /api/v1/agents/{id}`, `DELETE …` | `200`, `200`, `200`, `204` |
+| any endpoint of a delegate left unimplemented | `501` |
 
-The probes were temporary (not committed); without any delegate bean every endpoint answers `501`.
+The `400`/`503` paths answered with an **empty body**: the delegate cannot render `ApiError` (above).
+The probes were temporary (not committed).
 
 ## Layout
 
@@ -189,10 +196,12 @@ design below is settled.
   dedicated message broker (§9: RabbitMQ/Kafka/SQS, dimension by dimension) and the decisions still
   open (§7).
 - [`docs/service-api-sequences.md`](docs/service-api-sequences.md) — who calls which endpoint and in
-  which order (Jira client / desktop registering runs, agents claiming and reporting), job identity
-  (issue key in, service-generated `jobRunId`; every registration is an independent run), the state
-  machine incl. `DEAD`, failure semantics, agent inventory, capability matching and the Jira status
-  push. §11 mirrors the spec; §12 lists the semantics still open.
+  which order (Jira client / desktop / curl registering runs, agents claiming and reporting), run
+  identity (either an issue key or a test name in, service-generated `jobRunId` out; every
+  registration is an independent run), the two sources (§2.1: `JIRA` = details fetched from Jira and
+  result pushed back, `AD_HOC` = no Jira contact at all), the state machine incl. `DEAD`, failure
+  semantics, agent inventory, capability matching and the Jira status push. §11 mirrors the spec; §12
+  lists the semantics still open.
 
 ## Next steps
 

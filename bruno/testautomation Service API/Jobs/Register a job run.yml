@@ -30,7 +30,7 @@ http:
           "linux"
         ],
         "priority": 0,
-        "maxAttempts": 0
+        "maxAttempts": 1
       }
   auth: inherit
 

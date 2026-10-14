@@ -30,4 +30,30 @@
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
     </properties>
 
+    <build>
+        <pluginManagement>
+            <plugins>
+                <!-- Lombok must be an explicit annotation processor path, not just a provided
+                     dependency. Classpath-based (implicit) processor discovery is deprecated on
+                     JDK 21 and disabled by default from JDK 23 on, and any compiler run with
+                     -proc:none skips it too, which makes @Slf4j/@Getter... silently produce no
+                     members ("cannot find symbol"). Declaring it here fixes the process for both
+                     modules. Version comes from the Spring Boot BOM (${lombok.version}). -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <configuration>
+                        <annotationProcessorPaths>
+                            <path>
+                                <groupId>org.projectlombok</groupId>
+                                <artifactId>lombok</artifactId>
+                                <version>${lombok.version}</version>
+                            </path>
+                        </annotationProcessorPaths>
+                    </configuration>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+    </build>
+
 </project>

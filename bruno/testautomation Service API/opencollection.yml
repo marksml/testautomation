@@ -1,0 +1,67 @@
+opencollection: 1.0.0
+
+info:
+  name: testautomation Service API
+  version: "1"
+config:
+  proxy:
+    inherit: true
+    config:
+      protocol: http
+      hostname: ""
+      port: ""
+      auth:
+        username: ""
+        password: ""
+      bypassProxy: ""
+
+request:
+  auth:
+    type: bearer
+    token: "{{token}}"
+
+docs:
+  content: |
+    REST contract of the testautomation service: producers register test job runs, agents claim
+    and execute them, and the service owns all state (agents and clients have no database access).
+
+    This file is the **single source of truth** for the generated server code. The Maven build
+    (openapi-generator-maven-plugin, see `service/pom.xml`) generates one API interface and one
+    delegate interface per tag into `service/target/generated-sources/openapi`:
+
+    * `ch.mmar.testautomation.service.api.JobsApi` + `JobsApiController` — generated, never edited
+    * `ch.mmar.testautomation.service.api.JobsApiDelegate` — generated interface, implemented by hand
+    * `ch.mmar.testautomation.service.api.AgentsApi` + `AgentsApiController` + `AgentsApiDelegate`
+
+    Semantics, call sequences, failure handling and the open design points live in
+    `docs/service-api-sequences.md` (endpoint contract) and `docs/postgres-job-queue.md` (queue
+    mechanics, lease/reaper, idle behaviour). Change this file, not the generated code.
+
+    **Two kinds of run, distinguished implicitly by the registration payload:** with an `issueKey`
+    the run belongs to Jira — a scheduled job inside the service collects the test details from Jira
+    afterwards and the result is pushed back to Jira; without an `issueKey` and with a `testName` it
+    is an ad-hoc run (testautomation-desktop, a curl call) that never touches Jira and whose result
+    is only readable through this API. On the way out the distinction is explicit: every run carries
+    a derived `source` field.
+
+    **Registration only persists.** It never calls Jira: the registration is stored, the `jobRunId`
+    is minted and `200` is answered. A Jira-backed run starts as `PENDING` and becomes claimable only
+    once the scheduled collection has filled in its details; an ad-hoc run starts as `QUEUED`
+    immediately. A Jira outage therefore delays runs instead of failing registrations.
+
+    Status: the endpoints exist and are routed; they answer `501 Not Implemented` until a delegate
+    implementation is provided. Authentication is declared but not enforced.
+  type: text/markdown
+bundled: false
+extensions:
+  bruno:
+    ignore:
+      - node_modules
+      - .git
+    openapi:
+      - sourceUrl: ../../openapi/testautomation-service.yaml
+        groupBy: tags
+        lastSyncDate: 2026-10-14T19:45:52.106Z
+        specHash: 3c4af111a753419ae2a4afaffdfc7ce6
+        autoCheck: true
+        autoCheckInterval: 5

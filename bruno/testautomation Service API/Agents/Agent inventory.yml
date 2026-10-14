@@ -1,0 +1,120 @@
+info:
+  name: Agent inventory
+  type: http
+  seq: 2
+  tags:
+    - Agents
+
+http:
+  method: GET
+  url: "{{baseUrl}}/api/v1/agents"
+  params:
+    - name: status
+      value: ACTIVE
+      type: query
+      description: Only agents in this liveness state.
+      disabled: true
+    - name: status
+      value: STALE
+      type: query
+      description: Only agents in this liveness state.
+      disabled: true
+    - name: status
+      value: OFFLINE
+      type: query
+      description: Only agents in this liveness state.
+      disabled: true
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false
+
+examples:
+  - name: 200 Response
+    description: Registered agents.
+    request:
+      url: "{{baseUrl}}/api/v1/agents"
+      method: GET
+      params:
+        - name: status
+          value: ACTIVE
+          type: query
+          description: Only agents in this liveness state.
+          disabled: true
+        - name: status
+          value: STALE
+          type: query
+          description: Only agents in this liveness state.
+          disabled: true
+        - name: status
+          value: OFFLINE
+          type: query
+          description: Only agents in this liveness state.
+          disabled: true
+    response:
+      status: 200
+      statusText: OK
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          [
+            {
+              "agentId": "",
+              "name": "",
+              "capabilities": [],
+              "labels": {},
+              "maxJobs": 0,
+              "version": "",
+              "status": "ACTIVE",
+              "registeredAt": "",
+              "lastSeenAt": "",
+              "activeRuns": 0
+            }
+          ]
+  - name: 401 Response
+    description: Missing or invalid credentials for this role.
+    request:
+      url: "{{baseUrl}}/api/v1/agents"
+      method: GET
+      params:
+        - name: status
+          value: ACTIVE
+          type: query
+          description: Only agents in this liveness state.
+          disabled: true
+        - name: status
+          value: STALE
+          type: query
+          description: Only agents in this liveness state.
+          disabled: true
+        - name: status
+          value: OFFLINE
+          type: query
+          description: Only agents in this liveness state.
+          disabled: true
+    response:
+      status: 401
+      statusText: Unauthorized
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "status": 409,
+            "code": "LEASE_LOST",
+            "message": "",
+            "details": {}
+          }
+
+docs: |
+  Which agents exist, what they can do, when they were last seen and how many runs they
+  currently hold.

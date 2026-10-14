@@ -1,0 +1,283 @@
+info:
+  name: Submit the result of a finished job run
+  type: http
+  seq: 6
+  tags:
+    - Jobs
+
+http:
+  method: POST
+  url: "{{baseUrl}}/api/v1/jobs/:jobRunId/result"
+  params:
+    - name: jobRunId
+      value: ""
+      type: path
+      description: Identifier of the run, as returned by `registerJobRun` or `claimJobRun`.
+  body:
+    type: json
+    data: |-
+      {
+        "status": "PASSED",
+        "startedAt": "",
+        "finishedAt": "",
+        "durationMs": 0,
+        "message": "",
+        "stackTrace": "",
+        "artifacts": [
+          {
+            "name": "screenshot-login-failure.png",
+            "mediaType": "image/png",
+            "sizeBytes": 0,
+            "uri": "",
+            "sha256": ""
+          }
+        ]
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false
+
+examples:
+  - name: 200 Response
+    description: Result accepted (or already recorded with the same status).
+    request:
+      url: "{{baseUrl}}/api/v1/jobs/:jobRunId/result"
+      method: POST
+      params:
+        - name: jobRunId
+          value: ""
+          type: path
+          description: Identifier of the run, as returned by `registerJobRun` or `claimJobRun`.
+      body:
+        type: json
+        data: |-
+          {
+            "status": "PASSED",
+            "startedAt": "",
+            "finishedAt": "",
+            "durationMs": 0,
+            "message": "",
+            "stackTrace": "",
+            "artifacts": [
+              {
+                "name": "screenshot-login-failure.png",
+                "mediaType": "image/png",
+                "sizeBytes": 0,
+                "uri": "",
+                "sha256": ""
+              }
+            ]
+          }
+    response:
+      status: 200
+      statusText: OK
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "jobRunId": "",
+            "status": "PASSED",
+            "acceptedAt": ""
+          }
+  - name: 400 Response
+    description: Malformed or invalid request payload.
+    request:
+      url: "{{baseUrl}}/api/v1/jobs/:jobRunId/result"
+      method: POST
+      params:
+        - name: jobRunId
+          value: ""
+          type: path
+          description: Identifier of the run, as returned by `registerJobRun` or `claimJobRun`.
+      body:
+        type: json
+        data: |-
+          {
+            "status": "PASSED",
+            "startedAt": "",
+            "finishedAt": "",
+            "durationMs": 0,
+            "message": "",
+            "stackTrace": "",
+            "artifacts": [
+              {
+                "name": "screenshot-login-failure.png",
+                "mediaType": "image/png",
+                "sizeBytes": 0,
+                "uri": "",
+                "sha256": ""
+              }
+            ]
+          }
+    response:
+      status: 400
+      statusText: Bad Request
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "status": 409,
+            "code": "LEASE_LOST",
+            "message": "",
+            "details": {}
+          }
+  - name: 401 Response
+    description: Missing or invalid credentials for this role.
+    request:
+      url: "{{baseUrl}}/api/v1/jobs/:jobRunId/result"
+      method: POST
+      params:
+        - name: jobRunId
+          value: ""
+          type: path
+          description: Identifier of the run, as returned by `registerJobRun` or `claimJobRun`.
+      body:
+        type: json
+        data: |-
+          {
+            "status": "PASSED",
+            "startedAt": "",
+            "finishedAt": "",
+            "durationMs": 0,
+            "message": "",
+            "stackTrace": "",
+            "artifacts": [
+              {
+                "name": "screenshot-login-failure.png",
+                "mediaType": "image/png",
+                "sizeBytes": 0,
+                "uri": "",
+                "sha256": ""
+              }
+            ]
+          }
+    response:
+      status: 401
+      statusText: Unauthorized
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "status": 409,
+            "code": "LEASE_LOST",
+            "message": "",
+            "details": {}
+          }
+  - name: 404 Response
+    description: No run with this identifier.
+    request:
+      url: "{{baseUrl}}/api/v1/jobs/:jobRunId/result"
+      method: POST
+      params:
+        - name: jobRunId
+          value: ""
+          type: path
+          description: Identifier of the run, as returned by `registerJobRun` or `claimJobRun`.
+      body:
+        type: json
+        data: |-
+          {
+            "status": "PASSED",
+            "startedAt": "",
+            "finishedAt": "",
+            "durationMs": 0,
+            "message": "",
+            "stackTrace": "",
+            "artifacts": [
+              {
+                "name": "screenshot-login-failure.png",
+                "mediaType": "image/png",
+                "sizeBytes": 0,
+                "uri": "",
+                "sha256": ""
+              }
+            ]
+          }
+    response:
+      status: 404
+      statusText: Not Found
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "status": 409,
+            "code": "LEASE_LOST",
+            "message": "",
+            "details": {}
+          }
+  - name: 409 Response
+    description: Lease lost or run already terminal with a different status.
+    request:
+      url: "{{baseUrl}}/api/v1/jobs/:jobRunId/result"
+      method: POST
+      params:
+        - name: jobRunId
+          value: ""
+          type: path
+          description: Identifier of the run, as returned by `registerJobRun` or `claimJobRun`.
+      body:
+        type: json
+        data: |-
+          {
+            "status": "PASSED",
+            "startedAt": "",
+            "finishedAt": "",
+            "durationMs": 0,
+            "message": "",
+            "stackTrace": "",
+            "artifacts": [
+              {
+                "name": "screenshot-login-failure.png",
+                "mediaType": "image/png",
+                "sizeBytes": 0,
+                "uri": "",
+                "sha256": ""
+              }
+            ]
+          }
+    response:
+      status: 409
+      statusText: Conflict
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "status": 409,
+            "code": "LEASE_LOST",
+            "message": "",
+            "details": {}
+          }
+
+docs: |
+  Terminal call of the run lifecycle. A result is accepted only from the agent currently
+  holding the lease of that run:
+
+  * run not yet terminal → accepted; the run becomes terminal and the Jira push is queued in
+    the same commit;
+  * run already terminal with the **same** status → `200` with the same ack (a retry after a
+    network error must be harmless);
+  * run already terminal with a **different** status → `409 ALREADY_TERMINAL`;
+  * caller is not the lease holder (lease expired and reclaimed, i.e. a superseded attempt) →
+    `409 LEASE_LOST`.
+
+  Artifacts travel in-band in this payload.

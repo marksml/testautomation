@@ -1,0 +1,12 @@
+info:
+  name: Agents
+  type: folder
+
+request:
+  auth: inherit
+
+docs:
+  content: |
+    Agent inventory: registration with capabilities, liveness and deregistration. The service
+    derives liveness from any authenticated agent call, so no separate idle heartbeat is required.
+  type: text/markdown

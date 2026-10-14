@@ -1,0 +1,13 @@
+info:
+  name: Jobs
+  type: folder
+
+request:
+  auth: inherit
+
+docs:
+  content: |
+    Registering, reading, claiming, keeping alive and completing test job runs. Producers (Jira
+    client, testautomation-desktop) use the first three; test agents use the rest. Agents never
+    talk to PostgreSQL directly.
+  type: text/markdown

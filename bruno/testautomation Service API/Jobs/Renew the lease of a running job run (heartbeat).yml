@@ -1,0 +1,129 @@
+info:
+  name: Renew the lease of a running job run (heartbeat)
+  type: http
+  seq: 5
+  tags:
+    - Jobs
+
+http:
+  method: PUT
+  url: "{{baseUrl}}/api/v1/jobs/:jobRunId/lease"
+  params:
+    - name: jobRunId
+      value: ""
+      type: path
+      description: Identifier of the run, as returned by `registerJobRun` or `claimJobRun`.
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false
+
+examples:
+  - name: 200 Response
+    description: Lease renewed.
+    request:
+      url: "{{baseUrl}}/api/v1/jobs/:jobRunId/lease"
+      method: PUT
+      params:
+        - name: jobRunId
+          value: ""
+          type: path
+          description: Identifier of the run, as returned by `registerJobRun` or `claimJobRun`.
+    response:
+      status: 200
+      statusText: OK
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "jobRunId": "",
+            "leaseExpiresAt": "",
+            "heartbeatIntervalSeconds": 0
+          }
+  - name: 401 Response
+    description: Missing or invalid credentials for this role.
+    request:
+      url: "{{baseUrl}}/api/v1/jobs/:jobRunId/lease"
+      method: PUT
+      params:
+        - name: jobRunId
+          value: ""
+          type: path
+          description: Identifier of the run, as returned by `registerJobRun` or `claimJobRun`.
+    response:
+      status: 401
+      statusText: Unauthorized
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "status": 409,
+            "code": "LEASE_LOST",
+            "message": "",
+            "details": {}
+          }
+  - name: 404 Response
+    description: No run with this identifier.
+    request:
+      url: "{{baseUrl}}/api/v1/jobs/:jobRunId/lease"
+      method: PUT
+      params:
+        - name: jobRunId
+          value: ""
+          type: path
+          description: Identifier of the run, as returned by `registerJobRun` or `claimJobRun`.
+    response:
+      status: 404
+      statusText: Not Found
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "status": 409,
+            "code": "LEASE_LOST",
+            "message": "",
+            "details": {}
+          }
+  - name: 409 Response
+    description: Lease lost (`LEASE_LOST`) or run already terminal (`ALREADY_TERMINAL`).
+    request:
+      url: "{{baseUrl}}/api/v1/jobs/:jobRunId/lease"
+      method: PUT
+      params:
+        - name: jobRunId
+          value: ""
+          type: path
+          description: Identifier of the run, as returned by `registerJobRun` or `claimJobRun`.
+    response:
+      status: 409
+      statusText: Conflict
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "status": 409,
+            "code": "LEASE_LOST",
+            "message": "",
+            "details": {}
+          }
+
+docs: |
+  Called periodically by the agent while the test runs. A `409` means the lease is no longer
+  this agent's (expired and reclaimed, superseded by a newer attempt, or the run is already
+  terminal) — the agent must stop working on that run.

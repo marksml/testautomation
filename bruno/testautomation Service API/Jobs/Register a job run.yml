@@ -1,0 +1,221 @@
+info:
+  name: Register a job run
+  type: http
+  seq: 1
+  tags:
+    - Jobs
+
+http:
+  method: POST
+  url: "{{baseUrl}}/api/v1/jobs"
+  headers:
+    - name: Idempotency-Key
+      value: 6f0c2f1e-1b8e-4a4e-9d3f-2b7a6c1d8e44
+      description: |
+        Optional. A producer that may retry a registration (Jira webhook redelivery, flaky
+        network) can send a unique key here; the service then returns the run created for that
+        key instead of creating a second one. Without the header, every call creates a run.
+  body:
+    type: json
+    data: |-
+      {
+        "issueKey": "TEST-4711",
+        "testName": "login-smoke",
+        "parameters": {
+          "browser": "chrome",
+          "env": "staging"
+        },
+        "requiresCapabilities": [
+          "api-rest",
+          "linux"
+        ],
+        "priority": 0,
+        "maxAttempts": 0
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false
+
+examples:
+  - name: 200 Response
+    description: Registration persisted. The run identifier is in the body; a Jira-backed run is `PENDING` until the scheduled Jira collection has filled in its details.
+    request:
+      url: "{{baseUrl}}/api/v1/jobs"
+      method: POST
+      headers:
+        - name: Idempotency-Key
+          value: 6f0c2f1e-1b8e-4a4e-9d3f-2b7a6c1d8e44
+          description: |
+            Optional. A producer that may retry a registration (Jira webhook redelivery, flaky
+            network) can send a unique key here; the service then returns the run created for that
+            key instead of creating a second one. Without the header, every call creates a run.
+      body:
+        type: json
+        data: |-
+          {
+            "issueKey": "TEST-4711",
+            "testName": "login-smoke",
+            "parameters": {
+              "browser": "chrome",
+              "env": "staging"
+            },
+            "requiresCapabilities": [
+              "api-rest",
+              "linux"
+            ],
+            "priority": 0,
+            "maxAttempts": 0
+          }
+    response:
+      status: 200
+      statusText: OK
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "jobRunId": "",
+            "source": "JIRA",
+            "issueKey": "TEST-4711",
+            "testName": "",
+            "status": "PENDING",
+            "attempt": 0,
+            "agentId": "",
+            "createdAt": "",
+            "startedAt": "",
+            "finishedAt": "",
+            "leaseExpiresAt": "",
+            "result": {
+              "status": "PASSED",
+              "startedAt": "",
+              "finishedAt": "",
+              "durationMs": 0,
+              "message": "",
+              "stackTrace": "",
+              "artifacts": [
+                {
+                  "name": "screenshot-login-failure.png",
+                  "mediaType": "image/png",
+                  "sizeBytes": 0,
+                  "uri": "",
+                  "sha256": ""
+                }
+              ]
+            }
+          }
+  - name: 400 Response
+    description: Malformed or invalid request payload.
+    request:
+      url: "{{baseUrl}}/api/v1/jobs"
+      method: POST
+      headers:
+        - name: Idempotency-Key
+          value: 6f0c2f1e-1b8e-4a4e-9d3f-2b7a6c1d8e44
+          description: |
+            Optional. A producer that may retry a registration (Jira webhook redelivery, flaky
+            network) can send a unique key here; the service then returns the run created for that
+            key instead of creating a second one. Without the header, every call creates a run.
+      body:
+        type: json
+        data: |-
+          {
+            "issueKey": "TEST-4711",
+            "testName": "login-smoke",
+            "parameters": {
+              "browser": "chrome",
+              "env": "staging"
+            },
+            "requiresCapabilities": [
+              "api-rest",
+              "linux"
+            ],
+            "priority": 0,
+            "maxAttempts": 0
+          }
+    response:
+      status: 400
+      statusText: Bad Request
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "status": 409,
+            "code": "LEASE_LOST",
+            "message": "",
+            "details": {}
+          }
+  - name: 401 Response
+    description: Missing or invalid credentials for this role.
+    request:
+      url: "{{baseUrl}}/api/v1/jobs"
+      method: POST
+      headers:
+        - name: Idempotency-Key
+          value: 6f0c2f1e-1b8e-4a4e-9d3f-2b7a6c1d8e44
+          description: |
+            Optional. A producer that may retry a registration (Jira webhook redelivery, flaky
+            network) can send a unique key here; the service then returns the run created for that
+            key instead of creating a second one. Without the header, every call creates a run.
+      body:
+        type: json
+        data: |-
+          {
+            "issueKey": "TEST-4711",
+            "testName": "login-smoke",
+            "parameters": {
+              "browser": "chrome",
+              "env": "staging"
+            },
+            "requiresCapabilities": [
+              "api-rest",
+              "linux"
+            ],
+            "priority": 0,
+            "maxAttempts": 0
+          }
+    response:
+      status: 401
+      statusText: Unauthorized
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "status": 409,
+            "code": "LEASE_LOST",
+            "message": "",
+            "details": {}
+          }
+
+docs: |
+  Creates a **new, independent run**: the service generates the `jobRunId` and returns it.
+  Registering the same payload twice produces two runs, both executed — there is no
+  de-duplication and no overwrite.
+
+  **Which kind of run is created is decided implicitly by the payload:**
+
+  * `issueKey` set → **Jira-backed run** (`source: JIRA`). The details are collected from Jira
+    by a scheduled job inside the service, *after* this call returns, and the result is pushed
+    back to Jira when the run finishes. Whether the caller is the Jira client or a curl call
+    does not matter — what matters is that the details live in Jira. The run is `PENDING` until
+    the collection has filled them in, and is not claimable before that.
+  * `issueKey` empty, `testName` set → **ad-hoc run** (`source: AD_HOC`). Nothing is fetched
+    from Jira and nothing is pushed to Jira; the result is only readable through
+    `GET /api/v1/jobs` (the desktop component polls, it is not notified actively). Starts as
+    `QUEUED`, immediately claimable.
+  * neither set → `400`.
+
+  Each finished run is pushed to Jira on its own, regardless of which run of that issue
+  finishes last. This endpoint never waits for Jira: it persists and answers `200`.

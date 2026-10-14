@@ -1,0 +1,106 @@
+info:
+  name: Read one agent
+  type: http
+  seq: 3
+  tags:
+    - Agents
+
+http:
+  method: GET
+  url: "{{baseUrl}}/api/v1/agents/:agentId"
+  params:
+    - name: agentId
+      value: agent-01
+      type: path
+      description: Stable identifier an agent uses to register itself.
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false
+
+examples:
+  - name: 200 Response
+    description: The agent.
+    request:
+      url: "{{baseUrl}}/api/v1/agents/:agentId"
+      method: GET
+      params:
+        - name: agentId
+          value: agent-01
+          type: path
+          description: Stable identifier an agent uses to register itself.
+    response:
+      status: 200
+      statusText: OK
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "agentId": "",
+            "name": "",
+            "capabilities": [],
+            "labels": {},
+            "maxJobs": 0,
+            "version": "",
+            "status": "ACTIVE",
+            "registeredAt": "",
+            "lastSeenAt": "",
+            "activeRuns": 0
+          }
+  - name: 401 Response
+    description: Missing or invalid credentials for this role.
+    request:
+      url: "{{baseUrl}}/api/v1/agents/:agentId"
+      method: GET
+      params:
+        - name: agentId
+          value: agent-01
+          type: path
+          description: Stable identifier an agent uses to register itself.
+    response:
+      status: 401
+      statusText: Unauthorized
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "status": 409,
+            "code": "LEASE_LOST",
+            "message": "",
+            "details": {}
+          }
+  - name: 404 Response
+    description: No agent with this identifier.
+    request:
+      url: "{{baseUrl}}/api/v1/agents/:agentId"
+      method: GET
+      params:
+        - name: agentId
+          value: agent-01
+          type: path
+          description: Stable identifier an agent uses to register itself.
+    response:
+      status: 404
+      statusText: Not Found
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "status": 409,
+            "code": "LEASE_LOST",
+            "message": "",
+            "details": {}
+          }

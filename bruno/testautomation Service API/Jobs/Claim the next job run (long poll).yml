@@ -1,0 +1,217 @@
+info:
+  name: Claim the next job run (long poll)
+  type: http
+  seq: 4
+  tags:
+    - Jobs
+
+http:
+  method: POST
+  url: "{{baseUrl}}/api/v1/jobs/claim"
+  params:
+    - name: wait
+      value: "25"
+      type: query
+      description: |
+        Maximum time in seconds the service keeps the request open while nothing is claimable.
+        0 = answer immediately (short poll). Keep it below the idle timeout of any proxy or
+        load balancer in front of the service and below `spring.mvc.async.request-timeout`.
+  body:
+    type: json
+    data: |-
+      {
+        "agentId": "agent-01"
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false
+
+examples:
+  - name: 200 Response
+    description: A run was claimed and is now leased to this agent.
+    request:
+      url: "{{baseUrl}}/api/v1/jobs/claim"
+      method: POST
+      params:
+        - name: wait
+          value: "25"
+          type: query
+          description: |
+            Maximum time in seconds the service keeps the request open while nothing is claimable.
+            0 = answer immediately (short poll). Keep it below the idle timeout of any proxy or
+            load balancer in front of the service and below `spring.mvc.async.request-timeout`.
+      body:
+        type: json
+        data: |-
+          {
+            "agentId": "agent-01"
+          }
+    response:
+      status: 200
+      statusText: OK
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "jobRunId": "",
+            "source": "JIRA",
+            "issueKey": "",
+            "testName": "",
+            "parameters": {},
+            "requiresCapabilities": [],
+            "attempt": 0,
+            "createdAt": "",
+            "leaseExpiresAt": "",
+            "heartbeatIntervalSeconds": 0
+          }
+  - name: 204 Response
+    description: Nothing claimable within the wait window. Call again.
+    request:
+      url: "{{baseUrl}}/api/v1/jobs/claim"
+      method: POST
+      params:
+        - name: wait
+          value: "25"
+          type: query
+          description: |
+            Maximum time in seconds the service keeps the request open while nothing is claimable.
+            0 = answer immediately (short poll). Keep it below the idle timeout of any proxy or
+            load balancer in front of the service and below `spring.mvc.async.request-timeout`.
+      body:
+        type: json
+        data: |-
+          {
+            "agentId": "agent-01"
+          }
+    response:
+      status: 204
+      statusText: No Content
+      body:
+        type: text
+        data: ""
+  - name: 400 Response
+    description: Malformed or invalid request payload.
+    request:
+      url: "{{baseUrl}}/api/v1/jobs/claim"
+      method: POST
+      params:
+        - name: wait
+          value: "25"
+          type: query
+          description: |
+            Maximum time in seconds the service keeps the request open while nothing is claimable.
+            0 = answer immediately (short poll). Keep it below the idle timeout of any proxy or
+            load balancer in front of the service and below `spring.mvc.async.request-timeout`.
+      body:
+        type: json
+        data: |-
+          {
+            "agentId": "agent-01"
+          }
+    response:
+      status: 400
+      statusText: Bad Request
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "status": 409,
+            "code": "LEASE_LOST",
+            "message": "",
+            "details": {}
+          }
+  - name: 401 Response
+    description: Missing or invalid credentials for this role.
+    request:
+      url: "{{baseUrl}}/api/v1/jobs/claim"
+      method: POST
+      params:
+        - name: wait
+          value: "25"
+          type: query
+          description: |
+            Maximum time in seconds the service keeps the request open while nothing is claimable.
+            0 = answer immediately (short poll). Keep it below the idle timeout of any proxy or
+            load balancer in front of the service and below `spring.mvc.async.request-timeout`.
+      body:
+        type: json
+        data: |-
+          {
+            "agentId": "agent-01"
+          }
+    response:
+      status: 401
+      statusText: Unauthorized
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "status": 409,
+            "code": "LEASE_LOST",
+            "message": "",
+            "details": {}
+          }
+  - name: 409 Response
+    description: The agent may not claim (unknown/unregistered, or at its job limit).
+    request:
+      url: "{{baseUrl}}/api/v1/jobs/claim"
+      method: POST
+      params:
+        - name: wait
+          value: "25"
+          type: query
+          description: |
+            Maximum time in seconds the service keeps the request open while nothing is claimable.
+            0 = answer immediately (short poll). Keep it below the idle timeout of any proxy or
+            load balancer in front of the service and below `spring.mvc.async.request-timeout`.
+      body:
+        type: json
+        data: |-
+          {
+            "agentId": "agent-01"
+          }
+    response:
+      status: 409
+      statusText: Conflict
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "status": 409,
+            "code": "LEASE_LOST",
+            "message": "",
+            "details": {}
+          }
+
+docs: |
+  Returns the next claimable run for this agent, or `204 No Content` when nothing is
+  claimable within `wait` seconds. An agent is expected to call again immediately after a
+  `204`; that keeps wake-up latency in the millisecond range without hammering the database
+  (`docs/postgres-job-queue.md` §8).
+
+  The claim is atomic (`SELECT ... FOR UPDATE SKIP LOCKED`), so a run is never handed to two
+  agents. Requirements are matched against the agent's registered capabilities
+  (`run.requiresCapabilities ⊆ agent.capabilities`) and its `maxJobs` limit. The run is
+  leased: complete it, or renew the lease via `renewJobRunLease` before `leaseExpiresAt`,
+  otherwise the reaper re-queues it as a new attempt.
+
+  The response carries everything needed to execute — parameters, requirements, attempt,
+  lease deadline and the heartbeat interval — so the agent knows the cadence right after
+  claiming, without waiting for the first renewal.

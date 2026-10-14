@@ -1,0 +1,160 @@
+info:
+  name: Register or update this agent (upsert)
+  type: http
+  seq: 1
+  tags:
+    - Agents
+
+http:
+  method: POST
+  url: "{{baseUrl}}/api/v1/agents"
+  body:
+    type: json
+    data: |-
+      {
+        "agentId": "agent-01",
+        "name": "build-node-01",
+        "capabilities": [
+          "api-rest",
+          "linux"
+        ],
+        "labels": {
+          "env": "staging",
+          "os": "linux"
+        },
+        "maxJobs": 0,
+        "version": "0.2.0"
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false
+
+examples:
+  - name: 200 Response
+    description: Agent registered or updated.
+    request:
+      url: "{{baseUrl}}/api/v1/agents"
+      method: POST
+      body:
+        type: json
+        data: |-
+          {
+            "agentId": "agent-01",
+            "name": "build-node-01",
+            "capabilities": [
+              "api-rest",
+              "linux"
+            ],
+            "labels": {
+              "env": "staging",
+              "os": "linux"
+            },
+            "maxJobs": 0,
+            "version": "0.2.0"
+          }
+    response:
+      status: 200
+      statusText: OK
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "agentId": "",
+            "name": "",
+            "capabilities": [],
+            "labels": {},
+            "maxJobs": 0,
+            "version": "",
+            "status": "ACTIVE",
+            "registeredAt": "",
+            "lastSeenAt": "",
+            "activeRuns": 0
+          }
+  - name: 400 Response
+    description: Malformed or invalid request payload.
+    request:
+      url: "{{baseUrl}}/api/v1/agents"
+      method: POST
+      body:
+        type: json
+        data: |-
+          {
+            "agentId": "agent-01",
+            "name": "build-node-01",
+            "capabilities": [
+              "api-rest",
+              "linux"
+            ],
+            "labels": {
+              "env": "staging",
+              "os": "linux"
+            },
+            "maxJobs": 0,
+            "version": "0.2.0"
+          }
+    response:
+      status: 400
+      statusText: Bad Request
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "status": 409,
+            "code": "LEASE_LOST",
+            "message": "",
+            "details": {}
+          }
+  - name: 401 Response
+    description: Missing or invalid credentials for this role.
+    request:
+      url: "{{baseUrl}}/api/v1/agents"
+      method: POST
+      body:
+        type: json
+        data: |-
+          {
+            "agentId": "agent-01",
+            "name": "build-node-01",
+            "capabilities": [
+              "api-rest",
+              "linux"
+            ],
+            "labels": {
+              "env": "staging",
+              "os": "linux"
+            },
+            "maxJobs": 0,
+            "version": "0.2.0"
+          }
+    response:
+      status: 401
+      statusText: Unauthorized
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "status": 409,
+            "code": "LEASE_LOST",
+            "message": "",
+            "details": {}
+          }
+
+docs: |
+  Idempotent on `agentId`: re-registering refreshes capabilities, labels and `maxJobs`. The
+  response tells the agent the heartbeat interval and the liveness window it is expected to
+  stay inside. Every authenticated agent call (claim, lease, result) counts as a sign of
+  life, so an idle agent needs nothing extra.

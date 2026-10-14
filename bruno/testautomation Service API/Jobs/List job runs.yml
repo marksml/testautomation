@@ -1,0 +1,321 @@
+info:
+  name: List job runs
+  type: http
+  seq: 2
+  tags:
+    - Jobs
+
+http:
+  method: GET
+  url: "{{baseUrl}}/api/v1/jobs"
+  params:
+    - name: issueKey
+      value: TEST-4711
+      type: query
+      description: Only runs of this Jira issue.
+    - name: status
+      value: PENDING
+      type: query
+      description: Only runs in this state.
+      disabled: true
+    - name: status
+      value: QUEUED
+      type: query
+      description: Only runs in this state.
+      disabled: true
+    - name: status
+      value: RUNNING
+      type: query
+      description: Only runs in this state.
+      disabled: true
+    - name: status
+      value: SUCCEEDED
+      type: query
+      description: Only runs in this state.
+      disabled: true
+    - name: status
+      value: FAILED
+      type: query
+      description: Only runs in this state.
+      disabled: true
+    - name: status
+      value: ERROR
+      type: query
+      description: Only runs in this state.
+      disabled: true
+    - name: status
+      value: SKIPPED
+      type: query
+      description: Only runs in this state.
+      disabled: true
+    - name: status
+      value: CANCELLED
+      type: query
+      description: Only runs in this state.
+      disabled: true
+    - name: status
+      value: DEAD
+      type: query
+      description: Only runs in this state.
+      disabled: true
+    - name: limit
+      value: "20"
+      type: query
+    - name: offset
+      value: "0"
+      type: query
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: false
+
+examples:
+  - name: 200 Response
+    description: A page of runs.
+    request:
+      url: "{{baseUrl}}/api/v1/jobs"
+      method: GET
+      params:
+        - name: issueKey
+          value: TEST-4711
+          type: query
+          description: Only runs of this Jira issue.
+        - name: status
+          value: PENDING
+          type: query
+          description: Only runs in this state.
+          disabled: true
+        - name: status
+          value: QUEUED
+          type: query
+          description: Only runs in this state.
+          disabled: true
+        - name: status
+          value: RUNNING
+          type: query
+          description: Only runs in this state.
+          disabled: true
+        - name: status
+          value: SUCCEEDED
+          type: query
+          description: Only runs in this state.
+          disabled: true
+        - name: status
+          value: FAILED
+          type: query
+          description: Only runs in this state.
+          disabled: true
+        - name: status
+          value: ERROR
+          type: query
+          description: Only runs in this state.
+          disabled: true
+        - name: status
+          value: SKIPPED
+          type: query
+          description: Only runs in this state.
+          disabled: true
+        - name: status
+          value: CANCELLED
+          type: query
+          description: Only runs in this state.
+          disabled: true
+        - name: status
+          value: DEAD
+          type: query
+          description: Only runs in this state.
+          disabled: true
+        - name: limit
+          value: "20"
+          type: query
+        - name: offset
+          value: "0"
+          type: query
+    response:
+      status: 200
+      statusText: OK
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "items": [
+              {
+                "jobRunId": "",
+                "source": "JIRA",
+                "issueKey": "TEST-4711",
+                "testName": "",
+                "status": "PENDING",
+                "attempt": 0,
+                "agentId": "",
+                "createdAt": "",
+                "startedAt": "",
+                "finishedAt": ""
+              }
+            ],
+            "total": 0,
+            "limit": 0,
+            "offset": 0
+          }
+  - name: 400 Response
+    description: Malformed or invalid request payload.
+    request:
+      url: "{{baseUrl}}/api/v1/jobs"
+      method: GET
+      params:
+        - name: issueKey
+          value: TEST-4711
+          type: query
+          description: Only runs of this Jira issue.
+        - name: status
+          value: PENDING
+          type: query
+          description: Only runs in this state.
+          disabled: true
+        - name: status
+          value: QUEUED
+          type: query
+          description: Only runs in this state.
+          disabled: true
+        - name: status
+          value: RUNNING
+          type: query
+          description: Only runs in this state.
+          disabled: true
+        - name: status
+          value: SUCCEEDED
+          type: query
+          description: Only runs in this state.
+          disabled: true
+        - name: status
+          value: FAILED
+          type: query
+          description: Only runs in this state.
+          disabled: true
+        - name: status
+          value: ERROR
+          type: query
+          description: Only runs in this state.
+          disabled: true
+        - name: status
+          value: SKIPPED
+          type: query
+          description: Only runs in this state.
+          disabled: true
+        - name: status
+          value: CANCELLED
+          type: query
+          description: Only runs in this state.
+          disabled: true
+        - name: status
+          value: DEAD
+          type: query
+          description: Only runs in this state.
+          disabled: true
+        - name: limit
+          value: "20"
+          type: query
+        - name: offset
+          value: "0"
+          type: query
+    response:
+      status: 400
+      statusText: Bad Request
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "status": 409,
+            "code": "LEASE_LOST",
+            "message": "",
+            "details": {}
+          }
+  - name: 401 Response
+    description: Missing or invalid credentials for this role.
+    request:
+      url: "{{baseUrl}}/api/v1/jobs"
+      method: GET
+      params:
+        - name: issueKey
+          value: TEST-4711
+          type: query
+          description: Only runs of this Jira issue.
+        - name: status
+          value: PENDING
+          type: query
+          description: Only runs in this state.
+          disabled: true
+        - name: status
+          value: QUEUED
+          type: query
+          description: Only runs in this state.
+          disabled: true
+        - name: status
+          value: RUNNING
+          type: query
+          description: Only runs in this state.
+          disabled: true
+        - name: status
+          value: SUCCEEDED
+          type: query
+          description: Only runs in this state.
+          disabled: true
+        - name: status
+          value: FAILED
+          type: query
+          description: Only runs in this state.
+          disabled: true
+        - name: status
+          value: ERROR
+          type: query
+          description: Only runs in this state.
+          disabled: true
+        - name: status
+          value: SKIPPED
+          type: query
+          description: Only runs in this state.
+          disabled: true
+        - name: status
+          value: CANCELLED
+          type: query
+          description: Only runs in this state.
+          disabled: true
+        - name: status
+          value: DEAD
+          type: query
+          description: Only runs in this state.
+          disabled: true
+        - name: limit
+          value: "20"
+          type: query
+        - name: offset
+          value: "0"
+          type: query
+    response:
+      status: 401
+      statusText: Unauthorized
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "status": 409,
+            "code": "LEASE_LOST",
+            "message": "",
+            "details": {}
+          }
+
+docs: |
+  Answers "what happened with this issue?" — one issue can have many runs, so this is the
+  endpoint the desktop component and operators need. Newest first.

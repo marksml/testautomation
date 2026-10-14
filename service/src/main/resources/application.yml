@@ -8,3 +8,30 @@ spring:
 # SERVER_PORT environment variable (command line wins over this file).
 server:
   port: 8080
+
+# Interactive API documentation for local work: Swagger UI at /swagger-ui.html and the OpenAPI
+# document it renders at /v3/api-docs. Both are springdoc's defaults, stated here so the entry
+# points are discoverable next to the rest of the service configuration. springdoc derives them
+# from the annotations the build generates onto the API interfaces and models, i.e. from
+# openapi/testautomation-service.yaml — that file stays the single source of truth and is never
+# restated by hand.
+#
+# Disable both in a deployed environment (add to that profile / the environment's
+# application-<profile>.yml) once the role model of docs/service-api-sequences.md §10 is enforced:
+#   springdoc.api-docs.enabled=false
+#   springdoc.swagger-ui.enabled=false
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+    # The contract is authored in OpenAPI 3.0.3 (openapi/testautomation-service.yaml). springdoc
+    # otherwise serves 3.1, which expresses optional fields as a type array
+    # ("type": ["string","null"]) instead of 3.0's "nullable": true. Pinning the version keeps the
+    # served document in the dialect the spec is written in.
+    version: openapi-3-0
+  swagger-ui:
+    path: /swagger-ui.html
+    # Only titles the browser tab. The heading shown inside the UI comes from the document's own
+    # `info.title`, which springdoc composes itself and cannot take from the spec file — it renders
+    # the annotations, it does not read the YAML. Without a @OpenAPIDefinition class it stays the
+    # placeholder "OpenAPI definition" (see the README, "Swagger UI").
+    document-title: testautomation Service API

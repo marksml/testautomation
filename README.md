@@ -163,6 +163,40 @@ Rules that matter:
 The `400` path answered with an **empty body**: the delegate cannot render `ApiError` (above). The
 probes were temporary (not committed).
 
+### Swagger UI (local)
+
+The service serves an interactive UI at `/swagger-ui.html` (redirects to `/swagger-ui/index.html`);
+the document behind it is `/v3/api-docs`, its UI config `/v3/api-docs/swagger-config`. Nothing has to
+be wired up — springdoc's autoconfiguration scans the generated `@Controller` classes.
+
+| | |
+|---|---|
+| Dependency | `org.springdoc:springdoc-openapi-starter-webmvc-ui` **3.1.1**, version pinned in `service/pom.xml` because the Spring Boot BOM does not manage springdoc. 3.1.1 is the Spring Boot 4 line (its parent is `spring-boot-starter-parent` 4.1.0) and it pins swagger-core 2.2.55 — the same version as the explicit `swagger-annotations-jakarta` dependency, so the two agree. Its transitive `spring-boot-actuator-autoconfigure` is `optional`, so **`/actuator` is not exposed** by adding this. |
+| Where the documentation comes from | The annotations the build generates onto the API interfaces and models — `@Tag`, `@Operation` (summary + description), `@Parameter`, `@ApiResponse` — which carry the text of `openapi/testautomation-service.yaml`. The spec stays the single source of truth; the UI renders it instead of a second, hand-written description. |
+| Configuration | `service/src/main/resources/application.yml`, `springdoc:` block. All three settings there are optional: the paths are springdoc's defaults, stated explicitly so they are discoverable. |
+
+Verified against the running jar (2026-10-14): 7 paths and 10 operations served, **identical** to the
+spec; the four enum schemas appear inlined on their properties rather than as named components (no
+information lost); `POST /api/v1/jobs` carries its full 1 207-character description from the YAML.
+
+Two deviations from the served document, both deliberate or cosmetic:
+
+- `springdoc.api-docs.version: openapi-3-0`. springdoc defaults to serving OpenAPI 3.1, which writes
+  optional fields as a type array (`"type": ["string","null"]`); the contract is written in 3.0.3, so
+  the version is pinned to render `"nullable": true` instead. The served version string is 3.0.1
+  (springdoc's 3.0 dialect), not literally 3.0.3.
+- The heading **inside** the UI reads springdoc's placeholder `OpenAPI definition` / `v0`: springdoc
+  composes its own top-level `info` block and does not read the spec file, and it has no
+  `springdoc.info.*` property (checked against its own configuration metadata — such a block would be
+  silently ignored). The browser tab is titled correctly via `springdoc.swagger-ui.document-title`.
+  Fixing the heading needs a small `@OpenAPIDefinition` class restating title and version — open
+  decision, deliberately not taken yet because it duplicates two strings from the spec.
+
+Authentication is still unenforced (`docs/service-api-sequences.md` §10), so locally the UI shows all
+ten endpoints to anyone who can reach the port — acceptable for local work. Once the role model is
+enforced, disable both in the deployed environment's profile with
+`springdoc.api-docs.enabled=false` and `springdoc.swagger-ui.enabled=false`.
+
 ## Layout
 
 ```

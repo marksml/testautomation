@@ -21,6 +21,13 @@
              Version derived from: openapi-generator 7.19.0 / swagger-core 2.2.x line. -->
         <swagger-annotations-jakarta.version>2.2.55</swagger-annotations-jakarta.version>
         <openapi-generator.version>7.19.0</openapi-generator.version>
+
+        <!-- Spring Boot's BOM does not manage springdoc either (only springdoc does it for
+             swagger-core). 3.1.1 is the Spring Boot 4 line: its parent is
+             spring-boot-starter-parent 4.1.0 (this project is on 4.1.1) and it pins
+             swagger-api 2.2.55, the same swagger-core version as the property above, so the two
+             do not disagree. -->
+        <springdoc.version>3.1.1</springdoc.version>
     </properties>
 
     <dependencies>
@@ -46,6 +53,22 @@
             <groupId>io.swagger.core.v3</groupId>
             <artifactId>swagger-annotations-jakarta</artifactId>
             <version>${swagger-annotations-jakarta.version}</version>
+        </dependency>
+
+        <!-- Swagger UI (/swagger-ui.html) plus the document behind it (/v3/api-docs), rendered at
+             runtime by springdoc from the annotations the build puts on the generated API
+             interfaces and models. Those carry @Tag, @Operation (summary + description),
+             @Parameter and @ApiResponse with the text from openapi/testautomation-service.yaml, so
+             the UI shows the contract itself and the YAML stays the single source of truth — there
+             is no second, hand-maintained description of the API. Nothing to wire up: springdoc's
+             autoconfiguration scans the generated @Controller classes.
+
+             Adding this does NOT expose Spring Boot Actuator: springdoc's transitive
+             spring-boot-actuator-autoconfigure is optional, so it never reaches the classpath. -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+            <version>${springdoc.version}</version>
         </dependency>
 
         <dependency>

@@ -1,0 +1,97 @@
+meta {
+  name: Agent inventory
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/api/v1/agents
+  body: none
+  auth: inherit
+}
+
+params:query {
+  ~status: 
+}
+
+example {
+  name: 200 Response
+  description: Registered agents.
+  
+  request: {
+    url: {{baseUrl}}/api/v1/agents
+    method: GET
+    mode: none
+    params:query: {
+      ~status: 
+    }
+  }
+  
+  response: {
+    headers: {
+      Content-Type: application/json
+    }
+  
+    status: {
+      code: 200
+      text: OK
+    }
+  
+    body: {
+      type: json
+      content: '''
+        [
+          {
+            "agentId": "",
+            "name": "",
+            "capabilities": [],
+            "labels": {},
+            "maxJobs": 0,
+            "version": "",
+            "status": "",
+            "registeredAt": "",
+            "lastSeenAt": "",
+            "activeRuns": 0
+          }
+        ]
+      '''
+    }
+  }
+}
+
+example {
+  name: 401 Response
+  description: Missing or invalid credentials for this role.
+  
+  request: {
+    url: {{baseUrl}}/api/v1/agents
+    method: GET
+    mode: none
+    params:query: {
+      ~status: 
+    }
+  }
+  
+  response: {
+    headers: {
+      Content-Type: application/json
+    }
+  
+    status: {
+      code: 401
+      text: Unauthorized
+    }
+  
+    body: {
+      type: json
+      content: '''
+        {
+          "status": 0,
+          "code": "",
+          "message": "",
+          "details": {}
+        }
+      '''
+    }
+  }
+}

@@ -1,0 +1,132 @@
+meta {
+  name: Read one agent
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/api/v1/agents/:agentId
+  body: none
+  auth: inherit
+}
+
+params:path {
+  agentId: 
+}
+
+example {
+  name: 200 Response
+  description: The agent.
+  
+  request: {
+    url: {{baseUrl}}/api/v1/agents/:agentId
+    method: GET
+    mode: none
+    params:path: {
+      agentId: 
+    }
+  }
+  
+  response: {
+    headers: {
+      Content-Type: application/json
+    }
+  
+    status: {
+      code: 200
+      text: OK
+    }
+  
+    body: {
+      type: json
+      content: '''
+        {
+          "agentId": "",
+          "name": "",
+          "capabilities": [],
+          "labels": {},
+          "maxJobs": 0,
+          "version": "",
+          "status": "",
+          "registeredAt": "",
+          "lastSeenAt": "",
+          "activeRuns": 0
+        }
+      '''
+    }
+  }
+}
+
+example {
+  name: 401 Response
+  description: Missing or invalid credentials for this role.
+  
+  request: {
+    url: {{baseUrl}}/api/v1/agents/:agentId
+    method: GET
+    mode: none
+    params:path: {
+      agentId: 
+    }
+  }
+  
+  response: {
+    headers: {
+      Content-Type: application/json
+    }
+  
+    status: {
+      code: 401
+      text: Unauthorized
+    }
+  
+    body: {
+      type: json
+      content: '''
+        {
+          "status": 0,
+          "code": "",
+          "message": "",
+          "details": {}
+        }
+      '''
+    }
+  }
+}
+
+example {
+  name: 404 Response
+  description: No agent with this identifier.
+  
+  request: {
+    url: {{baseUrl}}/api/v1/agents/:agentId
+    method: GET
+    mode: none
+    params:path: {
+      agentId: 
+    }
+  }
+  
+  response: {
+    headers: {
+      Content-Type: application/json
+    }
+  
+    status: {
+      code: 404
+      text: Not Found
+    }
+  
+    body: {
+      type: json
+      content: '''
+        {
+          "status": 0,
+          "code": "",
+          "message": "",
+          "details": {}
+        }
+      '''
+    }
+  }
+}

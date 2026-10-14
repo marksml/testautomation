@@ -1,0 +1,233 @@
+meta {
+  name: Claim the next job run (long poll)
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/api/v1/jobs/claim
+  body: json
+  auth: inherit
+}
+
+params:query {
+  ~wait: 
+}
+
+body:json {
+  {
+    "agentId": ""
+  }
+}
+
+example {
+  name: 200 Response
+  description: A run was claimed and is now leased to this agent.
+  
+  request: {
+    url: {{baseUrl}}/api/v1/jobs/claim
+    method: POST
+    mode: json
+    params:query: {
+      ~wait: 
+    }
+  
+    body:json: {
+      {
+        "agentId": ""
+      }
+    }
+  }
+  
+  response: {
+    headers: {
+      Content-Type: application/json
+    }
+  
+    status: {
+      code: 200
+      text: OK
+    }
+  
+    body: {
+      type: json
+      content: '''
+        {
+          "jobRunId": "",
+          "source": "",
+          "issueKey": "",
+          "testName": "",
+          "parameters": {},
+          "requiresCapabilities": [],
+          "attempt": 0,
+          "createdAt": "",
+          "leaseExpiresAt": "",
+          "heartbeatIntervalSeconds": 0
+        }
+      '''
+    }
+  }
+}
+
+example {
+  name: 204 Response
+  description: Nothing claimable within the wait window. Call again.
+  
+  request: {
+    url: {{baseUrl}}/api/v1/jobs/claim
+    method: POST
+    mode: json
+    params:query: {
+      ~wait: 
+    }
+  
+    body:json: {
+      {
+        "agentId": ""
+      }
+    }
+  }
+  
+  response: {
+    status: {
+      code: 204
+      text: No Content
+    }
+  
+    body: {
+      type: text
+      content: '''
+  
+      '''
+    }
+  }
+}
+
+example {
+  name: 400 Response
+  description: Malformed or invalid request payload.
+  
+  request: {
+    url: {{baseUrl}}/api/v1/jobs/claim
+    method: POST
+    mode: json
+    params:query: {
+      ~wait: 
+    }
+  
+    body:json: {
+      {
+        "agentId": ""
+      }
+    }
+  }
+  
+  response: {
+    headers: {
+      Content-Type: application/json
+    }
+  
+    status: {
+      code: 400
+      text: Bad Request
+    }
+  
+    body: {
+      type: json
+      content: '''
+        {
+          "status": 0,
+          "code": "",
+          "message": "",
+          "details": {}
+        }
+      '''
+    }
+  }
+}
+
+example {
+  name: 401 Response
+  description: Missing or invalid credentials for this role.
+  
+  request: {
+    url: {{baseUrl}}/api/v1/jobs/claim
+    method: POST
+    mode: json
+    params:query: {
+      ~wait: 
+    }
+  
+    body:json: {
+      {
+        "agentId": ""
+      }
+    }
+  }
+  
+  response: {
+    headers: {
+      Content-Type: application/json
+    }
+  
+    status: {
+      code: 401
+      text: Unauthorized
+    }
+  
+    body: {
+      type: json
+      content: '''
+        {
+          "status": 0,
+          "code": "",
+          "message": "",
+          "details": {}
+        }
+      '''
+    }
+  }
+}
+
+example {
+  name: 409 Response
+  description: The agent may not claim (unknown/unregistered, or at its job limit).
+  
+  request: {
+    url: {{baseUrl}}/api/v1/jobs/claim
+    method: POST
+    mode: json
+    params:query: {
+      ~wait: 
+    }
+  
+    body:json: {
+      {
+        "agentId": ""
+      }
+    }
+  }
+  
+  response: {
+    headers: {
+      Content-Type: application/json
+    }
+  
+    status: {
+      code: 409
+      text: Conflict
+    }
+  
+    body: {
+      type: json
+      content: '''
+        {
+          "status": 0,
+          "code": "",
+          "message": "",
+          "details": {}
+        }
+      '''
+    }
+  }
+}

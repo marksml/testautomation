@@ -1,0 +1,151 @@
+meta {
+  name: List job runs
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/api/v1/jobs
+  body: none
+  auth: inherit
+}
+
+params:query {
+  ~issueKey: 
+  ~status: 
+  ~limit: 
+  ~offset: 
+}
+
+example {
+  name: 200 Response
+  description: A page of runs.
+  
+  request: {
+    url: {{baseUrl}}/api/v1/jobs
+    method: GET
+    mode: none
+    params:query: {
+      ~issueKey: 
+      ~status: 
+      ~limit: 
+      ~offset: 
+    }
+  }
+  
+  response: {
+    headers: {
+      Content-Type: application/json
+    }
+  
+    status: {
+      code: 200
+      text: OK
+    }
+  
+    body: {
+      type: json
+      content: '''
+        {
+          "items": [
+            {
+              "jobRunId": "",
+              "source": "",
+              "issueKey": "",
+              "testName": "",
+              "status": "",
+              "attempt": 0,
+              "agentId": "",
+              "createdAt": "",
+              "startedAt": "",
+              "finishedAt": ""
+            }
+          ],
+          "total": 0,
+          "limit": 0,
+          "offset": 0
+        }
+      '''
+    }
+  }
+}
+
+example {
+  name: 400 Response
+  description: Malformed or invalid request payload.
+  
+  request: {
+    url: {{baseUrl}}/api/v1/jobs
+    method: GET
+    mode: none
+    params:query: {
+      ~issueKey: 
+      ~status: 
+      ~limit: 
+      ~offset: 
+    }
+  }
+  
+  response: {
+    headers: {
+      Content-Type: application/json
+    }
+  
+    status: {
+      code: 400
+      text: Bad Request
+    }
+  
+    body: {
+      type: json
+      content: '''
+        {
+          "status": 0,
+          "code": "",
+          "message": "",
+          "details": {}
+        }
+      '''
+    }
+  }
+}
+
+example {
+  name: 401 Response
+  description: Missing or invalid credentials for this role.
+  
+  request: {
+    url: {{baseUrl}}/api/v1/jobs
+    method: GET
+    mode: none
+    params:query: {
+      ~issueKey: 
+      ~status: 
+      ~limit: 
+      ~offset: 
+    }
+  }
+  
+  response: {
+    headers: {
+      Content-Type: application/json
+    }
+  
+    status: {
+      code: 401
+      text: Unauthorized
+    }
+  
+    body: {
+      type: json
+      content: '''
+        {
+          "status": 0,
+          "code": "",
+          "message": "",
+          "details": {}
+        }
+      '''
+    }
+  }
+}

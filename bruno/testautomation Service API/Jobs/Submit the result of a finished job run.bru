@@ -1,0 +1,319 @@
+meta {
+  name: Submit the result of a finished job run
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{baseUrl}}/api/v1/jobs/:jobRunId/result
+  body: json
+  auth: inherit
+}
+
+params:path {
+  jobRunId: 
+}
+
+body:json {
+  {
+    "status": "",
+    "startedAt": "",
+    "finishedAt": "",
+    "durationMs": 0,
+    "message": "",
+    "stackTrace": "",
+    "artifacts": [
+      {
+        "name": "",
+        "mediaType": "",
+        "sizeBytes": 0,
+        "uri": "",
+        "sha256": ""
+      }
+    ]
+  }
+}
+
+example {
+  name: 200 Response
+  description: Result accepted (or already recorded with the same status).
+  
+  request: {
+    url: {{baseUrl}}/api/v1/jobs/:jobRunId/result
+    method: POST
+    mode: json
+    params:path: {
+      jobRunId: 
+    }
+  
+    body:json: {
+      {
+        "status": "",
+        "startedAt": "",
+        "finishedAt": "",
+        "durationMs": 0,
+        "message": "",
+        "stackTrace": "",
+        "artifacts": [
+          {
+            "name": "",
+            "mediaType": "",
+            "sizeBytes": 0,
+            "uri": "",
+            "sha256": ""
+          }
+        ]
+      }
+    }
+  }
+  
+  response: {
+    headers: {
+      Content-Type: application/json
+    }
+  
+    status: {
+      code: 200
+      text: OK
+    }
+  
+    body: {
+      type: json
+      content: '''
+        {
+          "jobRunId": "",
+          "status": "",
+          "acceptedAt": ""
+        }
+      '''
+    }
+  }
+}
+
+example {
+  name: 400 Response
+  description: Malformed or invalid request payload.
+  
+  request: {
+    url: {{baseUrl}}/api/v1/jobs/:jobRunId/result
+    method: POST
+    mode: json
+    params:path: {
+      jobRunId: 
+    }
+  
+    body:json: {
+      {
+        "status": "",
+        "startedAt": "",
+        "finishedAt": "",
+        "durationMs": 0,
+        "message": "",
+        "stackTrace": "",
+        "artifacts": [
+          {
+            "name": "",
+            "mediaType": "",
+            "sizeBytes": 0,
+            "uri": "",
+            "sha256": ""
+          }
+        ]
+      }
+    }
+  }
+  
+  response: {
+    headers: {
+      Content-Type: application/json
+    }
+  
+    status: {
+      code: 400
+      text: Bad Request
+    }
+  
+    body: {
+      type: json
+      content: '''
+        {
+          "status": 0,
+          "code": "",
+          "message": "",
+          "details": {}
+        }
+      '''
+    }
+  }
+}
+
+example {
+  name: 401 Response
+  description: Missing or invalid credentials for this role.
+  
+  request: {
+    url: {{baseUrl}}/api/v1/jobs/:jobRunId/result
+    method: POST
+    mode: json
+    params:path: {
+      jobRunId: 
+    }
+  
+    body:json: {
+      {
+        "status": "",
+        "startedAt": "",
+        "finishedAt": "",
+        "durationMs": 0,
+        "message": "",
+        "stackTrace": "",
+        "artifacts": [
+          {
+            "name": "",
+            "mediaType": "",
+            "sizeBytes": 0,
+            "uri": "",
+            "sha256": ""
+          }
+        ]
+      }
+    }
+  }
+  
+  response: {
+    headers: {
+      Content-Type: application/json
+    }
+  
+    status: {
+      code: 401
+      text: Unauthorized
+    }
+  
+    body: {
+      type: json
+      content: '''
+        {
+          "status": 0,
+          "code": "",
+          "message": "",
+          "details": {}
+        }
+      '''
+    }
+  }
+}
+
+example {
+  name: 404 Response
+  description: No run with this identifier.
+  
+  request: {
+    url: {{baseUrl}}/api/v1/jobs/:jobRunId/result
+    method: POST
+    mode: json
+    params:path: {
+      jobRunId: 
+    }
+  
+    body:json: {
+      {
+        "status": "",
+        "startedAt": "",
+        "finishedAt": "",
+        "durationMs": 0,
+        "message": "",
+        "stackTrace": "",
+        "artifacts": [
+          {
+            "name": "",
+            "mediaType": "",
+            "sizeBytes": 0,
+            "uri": "",
+            "sha256": ""
+          }
+        ]
+      }
+    }
+  }
+  
+  response: {
+    headers: {
+      Content-Type: application/json
+    }
+  
+    status: {
+      code: 404
+      text: Not Found
+    }
+  
+    body: {
+      type: json
+      content: '''
+        {
+          "status": 0,
+          "code": "",
+          "message": "",
+          "details": {}
+        }
+      '''
+    }
+  }
+}
+
+example {
+  name: 409 Response
+  description: Lease lost or run already terminal with a different status.
+  
+  request: {
+    url: {{baseUrl}}/api/v1/jobs/:jobRunId/result
+    method: POST
+    mode: json
+    params:path: {
+      jobRunId: 
+    }
+  
+    body:json: {
+      {
+        "status": "",
+        "startedAt": "",
+        "finishedAt": "",
+        "durationMs": 0,
+        "message": "",
+        "stackTrace": "",
+        "artifacts": [
+          {
+            "name": "",
+            "mediaType": "",
+            "sizeBytes": 0,
+            "uri": "",
+            "sha256": ""
+          }
+        ]
+      }
+    }
+  }
+  
+  response: {
+    headers: {
+      Content-Type: application/json
+    }
+  
+    status: {
+      code: 409
+      text: Conflict
+    }
+  
+    body: {
+      type: json
+      content: '''
+        {
+          "status": 0,
+          "code": "",
+          "message": "",
+          "details": {}
+        }
+      '''
+    }
+  }
+}

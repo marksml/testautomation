@@ -1,0 +1,196 @@
+meta {
+  name: Register a job run
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/v1/jobs
+  body: json
+  auth: inherit
+}
+
+headers {
+  ~Idempotency-Key: 
+}
+
+body:json {
+  {
+    "issueKey": "",
+    "testName": "",
+    "parameters": {},
+    "requiresCapabilities": [],
+    "priority": 0,
+    "maxAttempts": 0
+  }
+}
+
+example {
+  name: 200 Response
+  description: Registration persisted. The run identifier is in the body; a Jira-backed run is
+  `PENDING` until the scheduled Jira collection has filled in its details.
+  
+  
+  request: {
+    url: {{baseUrl}}/api/v1/jobs
+    method: POST
+    mode: json
+    headers: {
+      ~Idempotency-Key: 
+    }
+  
+    body:json: {
+      {
+        "issueKey": "",
+        "testName": "",
+        "parameters": {},
+        "requiresCapabilities": [],
+        "priority": 0,
+        "maxAttempts": 0
+      }
+    }
+  }
+  
+  response: {
+    headers: {
+      Content-Type: application/json
+    }
+  
+    status: {
+      code: 200
+      text: OK
+    }
+  
+    body: {
+      type: json
+      content: '''
+        {
+          "jobRunId": "",
+          "source": "",
+          "issueKey": "",
+          "testName": "",
+          "status": "",
+          "attempt": 0,
+          "agentId": "",
+          "createdAt": "",
+          "startedAt": "",
+          "finishedAt": "",
+          "leaseExpiresAt": "",
+          "result": {
+            "status": "",
+            "startedAt": "",
+            "finishedAt": "",
+            "durationMs": 0,
+            "message": "",
+            "stackTrace": "",
+            "artifacts": [
+              {
+                "name": "",
+                "mediaType": "",
+                "sizeBytes": 0,
+                "uri": "",
+                "sha256": ""
+              }
+            ]
+          }
+        }
+      '''
+    }
+  }
+}
+
+example {
+  name: 400 Response
+  description: Malformed or invalid request payload.
+  
+  request: {
+    url: {{baseUrl}}/api/v1/jobs
+    method: POST
+    mode: json
+    headers: {
+      ~Idempotency-Key: 
+    }
+  
+    body:json: {
+      {
+        "issueKey": "",
+        "testName": "",
+        "parameters": {},
+        "requiresCapabilities": [],
+        "priority": 0,
+        "maxAttempts": 0
+      }
+    }
+  }
+  
+  response: {
+    headers: {
+      Content-Type: application/json
+    }
+  
+    status: {
+      code: 400
+      text: Bad Request
+    }
+  
+    body: {
+      type: json
+      content: '''
+        {
+          "status": 0,
+          "code": "",
+          "message": "",
+          "details": {}
+        }
+      '''
+    }
+  }
+}
+
+example {
+  name: 401 Response
+  description: Missing or invalid credentials for this role.
+  
+  request: {
+    url: {{baseUrl}}/api/v1/jobs
+    method: POST
+    mode: json
+    headers: {
+      ~Idempotency-Key: 
+    }
+  
+    body:json: {
+      {
+        "issueKey": "",
+        "testName": "",
+        "parameters": {},
+        "requiresCapabilities": [],
+        "priority": 0,
+        "maxAttempts": 0
+      }
+    }
+  }
+  
+  response: {
+    headers: {
+      Content-Type: application/json
+    }
+  
+    status: {
+      code: 401
+      text: Unauthorized
+    }
+  
+    body: {
+      type: json
+      content: '''
+        {
+          "status": 0,
+          "code": "",
+          "message": "",
+          "details": {}
+        }
+      '''
+    }
+  }
+}

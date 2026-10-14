@@ -1,0 +1,160 @@
+meta {
+  name: Register or update this agent (upsert)
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/v1/agents
+  body: json
+  auth: inherit
+}
+
+body:json {
+  {
+    "agentId": "",
+    "name": "",
+    "capabilities": [],
+    "labels": {},
+    "maxJobs": 0,
+    "version": ""
+  }
+}
+
+example {
+  name: 200 Response
+  description: Agent registered or updated.
+  
+  request: {
+    url: {{baseUrl}}/api/v1/agents
+    method: POST
+    mode: json
+    body:json: {
+      {
+        "agentId": "",
+        "name": "",
+        "capabilities": [],
+        "labels": {},
+        "maxJobs": 0,
+        "version": ""
+      }
+    }
+  }
+  
+  response: {
+    headers: {
+      Content-Type: application/json
+    }
+  
+    status: {
+      code: 200
+      text: OK
+    }
+  
+    body: {
+      type: json
+      content: '''
+        {
+          "agentId": "",
+          "name": "",
+          "capabilities": [],
+          "labels": {},
+          "maxJobs": 0,
+          "version": "",
+          "status": "",
+          "registeredAt": "",
+          "lastSeenAt": "",
+          "activeRuns": 0
+        }
+      '''
+    }
+  }
+}
+
+example {
+  name: 400 Response
+  description: Malformed or invalid request payload.
+  
+  request: {
+    url: {{baseUrl}}/api/v1/agents
+    method: POST
+    mode: json
+    body:json: {
+      {
+        "agentId": "",
+        "name": "",
+        "capabilities": [],
+        "labels": {},
+        "maxJobs": 0,
+        "version": ""
+      }
+    }
+  }
+  
+  response: {
+    headers: {
+      Content-Type: application/json
+    }
+  
+    status: {
+      code: 400
+      text: Bad Request
+    }
+  
+    body: {
+      type: json
+      content: '''
+        {
+          "status": 0,
+          "code": "",
+          "message": "",
+          "details": {}
+        }
+      '''
+    }
+  }
+}
+
+example {
+  name: 401 Response
+  description: Missing or invalid credentials for this role.
+  
+  request: {
+    url: {{baseUrl}}/api/v1/agents
+    method: POST
+    mode: json
+    body:json: {
+      {
+        "agentId": "",
+        "name": "",
+        "capabilities": [],
+        "labels": {},
+        "maxJobs": 0,
+        "version": ""
+      }
+    }
+  }
+  
+  response: {
+    headers: {
+      Content-Type: application/json
+    }
+  
+    status: {
+      code: 401
+      text: Unauthorized
+    }
+  
+    body: {
+      type: json
+      content: '''
+        {
+          "status": 0,
+          "code": "",
+          "message": "",
+          "details": {}
+        }
+      '''
+    }
+  }
+}

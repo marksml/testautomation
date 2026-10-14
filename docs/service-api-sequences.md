@@ -40,7 +40,8 @@ Two consequences follow from "no database access for the clients":
 ```
 POST /api/v1/jobs   { issueKey: "TEST-4711", parameters: { … } }        → Jira-backed run
 POST /api/v1/jobs   { testName: "login-smoke", parameters: { … } }      → ad-hoc run
-   → 201 { jobRunId: "9f1c…", source: "JIRA" | "AD_HOC", status: "QUEUED", createdAt: … }
+   → 200 { jobRunId: "9f1c…", source: "JIRA" | "AD_HOC",
+           status: "PENDING" | "QUEUED", createdAt: … }
 ```
 
 - The client sends the **issue key or the test name** (plus parameters). It does not choose an
@@ -49,6 +50,10 @@ POST /api/v1/jobs   { testName: "login-smoke", parameters: { … } }      → ad
   run: the agent receives it at claim time and uses it for lease renewal and result submission.
 - **Which kind of run is created is decided implicitly by the payload** — no client-type field, no
   separate endpoint (§2.1).
+- **Registration only persists.** It makes no Jira call: the row is written, the `jobRunId` is minted
+  and `200` is answered. A Jira-backed run starts as `PENDING` and becomes claimable only once the
+  scheduled collection has filled in its Jira details; an ad-hoc run starts as `QUEUED` right away.
+  A Jira outage therefore delays runs — it never fails a registration.
 - **Registration is deliberately not idempotent.** Two calls with the same payload produce two
   distinct runs, and both are executed. No dedupe, no overwrite, no generation counter.
 - Runs are **fully independent**: separate queue rows, leases, attempts and results. They execute in
@@ -61,7 +66,7 @@ POST /api/v1/jobs   { testName: "login-smoke", parameters: { … } }      → ad
 
 | Registration payload | Source | Test definition | Result |
 |---|---|---|---|
-| `issueKey` set (with or without `testName`) | `JIRA` | the service fetches it from Jira via REST | pushed to Jira when the run finishes |
+| `issueKey` set (with or without `testName`) | `JIRA` | collected from Jira by a scheduled job, after registration | pushed to Jira when the run finishes |
 | `issueKey` empty, `testName` set | `AD_HOC` | taken from `testName` | **nowhere** — only readable through `GET /api/v1/jobs` |
 | neither | — | — | `400` |
 
@@ -93,7 +98,7 @@ so a caller that wants retry safety can have it without changing the semantics f
 
 | Method | Path | Semantics |
 |---|---|---|
-| `POST` | `/api/v1/jobs` | Register a run. Body: `issueKey` (Jira-backed) **or** `testName` (ad-hoc), plus `parameters{}`, `requiresCapabilities[]`, `priority`, `maxAttempts`. Always creates a run → `201` + `{jobRunId, source, status, createdAt}`; `503` if a Jira-backed run cannot be resolved from Jira. |
+| `POST` | `/api/v1/jobs` | Register a run. Body: `issueKey` (Jira-backed) **or** `testName` (ad-hoc), plus `parameters{}`, `requiresCapabilities[]`, `priority`, `maxAttempts`. Persists the registration → `200` + `{jobRunId, source, status, createdAt}`; `PENDING` for a Jira-backed run (details arrive later, §2.1), `QUEUED` for an ad-hoc one. **No Jira call on this path.** |
 | `GET` | `/api/v1/jobs/{jobRunId}` | State and, when finished, the result of one run. |
 | `GET` | `/api/v1/jobs` | List runs, filter by `issueKey` and `status`, paged with `limit`/`offset`. An issue can have several runs, so this is what answers "what happened with TEST-4711?". |
 | `DELETE` | `/api/v1/jobs/{jobRunId}` | Cancel a queued or running run — not requested yet, §12.5. |
@@ -114,10 +119,12 @@ so a caller that wants retry safety can have it without changing the semantics f
 ```
 Jira client / desktop        Service (only DB owner)                 Test agent A / B
       |                             |                                     |
-      |-- 1 POST /jobs TEST-4711 -->| run 9f1c… : QUEUED                  |
-      |<-- 201 {jobRunId} ----------|                                     |
-      |-- 2 POST /jobs TEST-4711 -->| run 4ab2… : QUEUED  (independent!)  |
-      |<-- 201 {jobRunId} ----------|                                     |
+      |-- 1 POST /jobs TEST-4711 -->| run 9f1c… : PENDING                 |
+      |<-- 200 {jobRunId} ----------|                                     |
+      |-- 2 POST /jobs TEST-4711 -->| run 4ab2… : PENDING  (independent!) |
+      |<-- 200 {jobRunId} ----------|                                     |
+      |                             | scheduled Jira collection: details   |
+      |                             | of TEST-4711 fetched → both QUEUED   |
       |                             |<-- 3 POST /agents (once per agent)--|  register capabilities
       |                             |--- 200 {heartbeatIntervalSeconds}-->|
       |                             |<-- 4 POST /jobs/claim?wait=25 ------|  agent A
@@ -147,15 +154,20 @@ answers `204`; the agent immediately calls again (see `postgres-job-queue.md` §
 ## 5. State machine
 
 ```
-   register → QUEUED ──claim──▶ RUNNING ──first result──▶ SUCCEEDED | FAILED | ERROR | SKIPPED
-                ▲                 │
-                │                 ├── lease expired → QUEUED again, attempt++
-                │                 │        └── attempt > maxAttempts → DEAD
-                │                 │
-                │                 └── late result of a superseded attempt → 409, discarded
-                │                     (the run is already terminal: first result wins)
-                └──
+   ad-hoc:       register ─────────────────────▶ QUEUED ──claim──▶ RUNNING ──1st result──▶ terminal
+   Jira-backed:  register ─▶ PENDING ──scheduled collection──▶ QUEUED ──claim──▶ RUNNING ─▶ terminal
+                              │  (fills in the Jira details)
+                              └── collection never succeeds → stays PENDING (§12.9)
+
+   terminal = SUCCEEDED | FAILED | ERROR | SKIPPED | CANCELLED | DEAD
+   RUNNING ──lease expired──▶ QUEUED again, attempt++ ──attempt > maxAttempts──▶ DEAD
+   RUNNING ──late result of a superseded attempt──▶ 409, discarded (first result wins)
 ```
+
+- **`PENDING` is a waiting state, not a queue state.** A `PENDING` run must be invisible to the claim
+  query — an agent would otherwise execute a run whose Jira details have not arrived yet. The
+  scheduled collection moves it to `QUEUED`; until then `GET` reports `PENDING`, which is how the
+  desktop explains "registered, nothing is happening yet".
 
 - **Per run**, not per issue: two runs of `TEST-4711` have completely separate states.
 - **A result is accepted only from the agent currently holding the lease of that run**, and only while
@@ -266,7 +278,7 @@ interfaces, one per tag, each satisfied by exactly one bean: `JobsApiDelegate` (
 
 | Endpoint | Request | Response |
 |---|---|---|
-| `POST /api/v1/jobs` | `JobRunRegistration` (`issueKey` **or** `testName`; `parameters`, `requiresCapabilities`, `priority`, `maxAttempts` optional) + optional `Idempotency-Key` header | `201` `JobRun`, `503` if Jira cannot resolve a Jira-backed run |
+| `POST /api/v1/jobs` | `JobRunRegistration` (`issueKey` **or** `testName`; `parameters`, `requiresCapabilities`, `priority`, `maxAttempts` optional) + optional `Idempotency-Key` header | `200` `JobRun` (`PENDING` for Jira-backed, `QUEUED` for ad-hoc); no Jira call |
 | `GET /api/v1/jobs` | `issueKey`, `status`, `limit`, `offset` | `200` `JobRunPage` |
 | `GET /api/v1/jobs/{jobRunId}` | — | `200` `JobRun` (incl. `result` when terminal), `404` |
 
@@ -285,7 +297,8 @@ interfaces, one per tag, each satisfied by exactly one bean: `JobsApiDelegate` (
 Models: `JobRunRegistration`, `JobRun`, `JobRunSummary`, `JobRunPage`, `JobClaimRequest`,
 `ClaimedJobRun`, `JobRunLease`, `JobRunResult`, `JobRunResultAck`, `TestArtifact`,
 `AgentRegistration`, `Agent`, `ApiError`; enums `JobRunSource` (`JIRA | AD_HOC`), `JobRunStatus`
-(`QUEUED | RUNNING | SUCCEEDED | FAILED | ERROR | SKIPPED | CANCELLED | DEAD`), `TestResultStatus`
+(`PENDING | QUEUED | RUNNING | SUCCEEDED | FAILED | ERROR | SKIPPED | CANCELLED | DEAD`),
+`TestResultStatus`
 (`PASSED | FAILED | ERROR | SKIPPED | CANCELLED`), `AgentStatus` (`ACTIVE | STALE | OFFLINE`).
 `JobRun`, `JobRunSummary` and `ClaimedJobRun` all carry the derived `source`; `issueKey` is optional
 in all three because ad-hoc runs have none.
@@ -302,10 +315,10 @@ Deliberately **not** in the spec, with the reason:
 
 ## 12. Open points (need a decision)
 
-1. **What the service fetches from Jira, and how it maps to the run.** The decision that an
-   `issueKey` means "resolve the details from Jira" is taken; which Jira fields are read, and how
-   they become the run's parameters and test definition (so that the claim response is complete for a
-   DB-less agent), is still open.
+1. **Which Jira fields are collected — decided as an implementation detail** (PO decision), and not
+   part of this interface. The contract only promises that by the time a Jira-backed run is
+   claimable, its Jira-derived details are present in the claim response (a DB-less agent must not
+   have to look anything up); how they map onto `parameters` is the service's business.
 2. **Registration retry safety** — accept the duplicate-run risk for the Jira webhook, or support the
    optional `Idempotency-Key` header for producers that want it?
 3. **Jira push scope and representation** — terminal states + `DEAD` only, or also `QUEUED`/`RUNNING`?
@@ -323,10 +336,12 @@ Deliberately **not** in the spec, with the reason:
    an attempt (e.g. a missing dependency on that agent)?
 8. **Per-run maximum runtime** — nothing stops a hung agent that keeps heartbeating from holding a
    run indefinitely. Is a maximum runtime (or a runtime hint at claim time) needed?
-9. **Jira enrichment on registration** — when is it fetched (at registration, i.e. fail fast, or
-   lazily at claim time?), and what happens when Jira rejects the key or is unreachable? Current
-   proposal in the spec: fetch at registration, answer `503 JIRA_UNAVAILABLE`, create no run, let the
-   caller retry.
+9. **The scheduled Jira collection** — settled that it runs inside the service and *not* on the
+   registration path (`POST /jobs` only persists and answers `200`). Still open: how often it runs,
+   its retry/backoff policy, and what happens to a run whose details can never be collected (unknown
+   or deleted issue key). Recommend retry with backoff, then `DEAD` with a reason: a run stuck in
+   `PENDING` forever is worse than an honest `DEAD`, because the desktop can show `DEAD` (and see
+   §12.3 for how Jira should show it) but can only show "waiting" for the other.
 10. **Error response shape** — the spec declares `ApiError` for `400`/`401`/`404`/`409`, but Spring
     Boot's default error JSON is what clients actually receive today. A `@RestControllerAdvice`
     mapping exceptions to `ApiError` has to be part of the delegate implementation, or the spec

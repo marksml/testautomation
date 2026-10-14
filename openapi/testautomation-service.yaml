@@ -20,10 +20,16 @@ info:
     mechanics, lease/reaper, idle behaviour). Change this file, not the generated code.
 
     **Two kinds of run, distinguished implicitly by the registration payload:** with an `issueKey`
-    the run belongs to Jira — the service fetches the test details from Jira and pushes the result
-    back to Jira; without an `issueKey` and with a `testName` it is an ad-hoc run (testautomation-
-    desktop, a curl call) that never touches Jira and whose result is only readable through this
-    API. On the way out the distinction is explicit: every run carries a derived `source` field.
+    the run belongs to Jira — a scheduled job inside the service collects the test details from Jira
+    afterwards and the result is pushed back to Jira; without an `issueKey` and with a `testName` it
+    is an ad-hoc run (testautomation-desktop, a curl call) that never touches Jira and whose result
+    is only readable through this API. On the way out the distinction is explicit: every run carries
+    a derived `source` field.
+
+    **Registration only persists.** It never calls Jira: the registration is stored, the `jobRunId`
+    is minted and `200` is answered. A Jira-backed run starts as `PENDING` and becomes claimable only
+    once the scheduled collection has filled in its details; an ad-hoc run starts as `QUEUED`
+    immediately. A Jira outage therefore delays runs instead of failing registrations.
 
     Status: the endpoints exist and are routed; they answer `501 Not Implemented` until a delegate
     implementation is provided. Authentication is declared but not enforced.
@@ -63,17 +69,19 @@ paths:
 
         **Which kind of run is created is decided implicitly by the payload:**
 
-        * `issueKey` set → **Jira-backed run** (`source: JIRA`). The service fetches the details it
-          needs from the Jira REST API, and pushes the result back to Jira when the run finishes.
-          Whether the caller is the Jira client or a curl call does not matter — what matters is
-          that the details live in Jira.
+        * `issueKey` set → **Jira-backed run** (`source: JIRA`). The details are collected from Jira
+          by a scheduled job inside the service, *after* this call returns, and the result is pushed
+          back to Jira when the run finishes. Whether the caller is the Jira client or a curl call
+          does not matter — what matters is that the details live in Jira. The run is `PENDING` until
+          the collection has filled them in, and is not claimable before that.
         * `issueKey` empty, `testName` set → **ad-hoc run** (`source: AD_HOC`). Nothing is fetched
           from Jira and nothing is pushed to Jira; the result is only readable through
-          `GET /api/v1/jobs` (the desktop component polls, it is not notified actively).
+          `GET /api/v1/jobs` (the desktop component polls, it is not notified actively). Starts as
+          `QUEUED`, immediately claimable.
         * neither set → `400`.
 
         Each finished run is pushed to Jira on its own, regardless of which run of that issue
-        finishes last.
+        finishes last. This endpoint never waits for Jira: it persists and answers `200`.
       parameters:
         - name: Idempotency-Key
           in: header
@@ -92,13 +100,10 @@ paths:
             schema:
               $ref: '#/components/schemas/JobRunRegistration'
       responses:
-        '201':
-          description: Run created.
-          headers:
-            Location:
-              description: URL of the created run (`GET /api/v1/jobs/{jobRunId}`).
-              schema:
-                type: string
+        '200':
+          description: |
+            Registration persisted. The run identifier is in the body; a Jira-backed run is
+            `PENDING` until the scheduled Jira collection has filled in its details.
           content:
             application/json:
               schema:
@@ -107,8 +112,6 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
-        '503':
-          $ref: '#/components/responses/JiraUnavailable'
 
     get:
       tags: [Jobs]
@@ -449,14 +452,6 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ApiError'
-    JiraUnavailable:
-      description: |
-        Jira could not be reached to resolve a Jira-backed run. The registration was not created —
-        the caller may retry (see `docs/service-api-sequences.md` §12.9).
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ApiError'
     JobRunNotFound:
       description: No run with this identifier.
       content:
@@ -482,9 +477,10 @@ components:
         issueKey:
           type: string
           description: |
-            Jira issue the run belongs to. Set it when the test details live in Jira: the service
-            fetches them itself and pushes the result back to Jira. Several runs may exist per
-            issue. Omit it for an ad-hoc run started by the desktop component or a curl call.
+            Jira issue the run belongs to. Set it when the test details live in Jira: a scheduled job
+            inside the service collects them afterwards and the result is pushed back to Jira.
+            Several runs may exist per issue. Omit it for an ad-hoc run started by the desktop
+            component or a curl call. This call itself never contacts Jira.
           example: TEST-4711
         testName:
           type: string
@@ -524,17 +520,20 @@ components:
     JobRunSource:
       type: string
       description: |
-        Where the run's test definition comes from, derived from the registration (never sent by a
-        client): `JIRA` = fetched from Jira, result pushed back to Jira; `AD_HOC` = started directly
-        against the service, no Jira contact at all.
+        Where the run's test details come from. Derived purely from the registration payload (never
+        sent by a client, no Jira call needed): `JIRA` = collected from Jira by the scheduled job
+        after registration, result pushed back to Jira; `AD_HOC` = started directly against the
+        service, no Jira contact at all.
       enum: [JIRA, AD_HOC]
 
     JobRunStatus:
       type: string
       description: |
         State of a run. `SUCCEEDED`, `FAILED`, `ERROR`, `SKIPPED`, `CANCELLED` and `DEAD` are
-        terminal.
-      enum: [QUEUED, RUNNING, SUCCEEDED, FAILED, ERROR, SKIPPED, CANCELLED, DEAD]
+        terminal. `PENDING` means a Jira-backed run whose details the scheduled collection has not
+        delivered yet: it is not claimable, so no agent can execute it half-informed. It becomes
+        `QUEUED` once the details are there (an ad-hoc run skips `PENDING` entirely).
+      enum: [PENDING, QUEUED, RUNNING, SUCCEEDED, FAILED, ERROR, SKIPPED, CANCELLED, DEAD]
 
     TestResultStatus:
       type: string
@@ -856,7 +855,7 @@ components:
       type: object
       description: |
         Error payload. Codes in use: `VALIDATION_FAILED`, `LEASE_LOST`, `ALREADY_TERMINAL`,
-        `AGENT_UNKNOWN`, `JOB_RUN_UNKNOWN`, `JIRA_UNAVAILABLE`. An RFC 7807 `ProblemDetail` shape is
+        `AGENT_UNKNOWN`, `JOB_RUN_UNKNOWN`. An RFC 7807 `ProblemDetail` shape is
         the likely alternative once the error-handling convention is fixed.
       required: [status, message]
       properties:

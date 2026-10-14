@@ -67,7 +67,7 @@ model/…                                                               JobRun, 
 
 | Endpoint | Caller | Returns |
 |---|---|---|
-| `POST /api/v1/jobs` | producer (Jira client, desktop, curl) | `201` `JobRun` (`source: JIRA` with an `issueKey`, `AD_HOC` with a `testName` alone) + `Location`; optional `Idempotency-Key` header; `503` if Jira cannot resolve a Jira-backed run |
+| `POST /api/v1/jobs` | producer (Jira client, desktop, curl) | `200` `JobRun` (`source: JIRA` with an `issueKey` → `status: PENDING` until the scheduled Jira collection fills in the details; `AD_HOC` with a `testName` alone → `QUEUED` at once); optional `Idempotency-Key` header. No Jira call on this path |
 | `GET /api/v1/jobs` | producer / ops | `200` `JobRunPage` (`issueKey`, `status`, `limit`, `offset`) |
 | `GET /api/v1/jobs/{jobRunId}` | producer / ops | `200` `JobRun` (incl. result), `404` |
 | `POST /api/v1/jobs/claim?wait=` | agent | `200` `ClaimedJobRun`, `204` when nothing is claimable |
@@ -148,11 +148,11 @@ Rules that matter:
 
 | Request | Result |
 |---|---|
-| `POST /api/v1/jobs` with `{"issueKey":"TEST-4711",…}` + `Idempotency-Key` | `201`, `source: JIRA`, `Location` header set, header value reached the delegate |
-| `POST /api/v1/jobs` with `{"testName":"login-smoke"}` | `201`, `source: AD_HOC`, no `issueKey` in the response |
-| `POST /api/v1/jobs` with `issueKey` **and** `testName` | `201`, `source: JIRA`, `testName` recorded on the run |
+| `POST /api/v1/jobs` with `{"issueKey":"TEST-4711",…}` | `200`, `source: JIRA`, `status: PENDING`, **no** `Location` header |
+| `POST /api/v1/jobs` with `{"testName":"login-smoke"}` | `200`, `source: AD_HOC`, `status: QUEUED`, no `issueKey` in the response |
+| `POST /api/v1/jobs` with `issueKey` **and** `testName` | `200`, `source: JIRA`, `testName` recorded on the run |
 | `POST /api/v1/jobs` with neither field | `400` — enforced by the delegate; the generated models do not reject it |
-| `POST /api/v1/jobs` for a run whose Jira lookup fails | `503`, no run created |
+| `GET /api/v1/jobs?issueKey=TEST-4711&status=PENDING&limit=5&offset=0` | `200`, the new enum value binds, all four parameters bound |
 | `GET /api/v1/jobs?issueKey=TEST-4711&status=RUNNING&limit=5&offset=10` | `200`, all four parameters bound (enum included) |
 | `GET /api/v1/jobs?status=BOGUS` | `400` (enum conversion rejected) |
 | `POST /api/v1/jobs/claim?wait=7` + `{"agentId":"agent-01"}` | `200` `ClaimedJobRun` incl. `heartbeatIntervalSeconds` |
@@ -160,8 +160,8 @@ Rules that matter:
 | `POST /api/v1/agents`, `GET /api/v1/agents?status=STALE`, `GET /api/v1/agents/{id}`, `DELETE …` | `200`, `200`, `200`, `204` |
 | any endpoint of a delegate left unimplemented | `501` |
 
-The `400`/`503` paths answered with an **empty body**: the delegate cannot render `ApiError` (above).
-The probes were temporary (not committed).
+The `400` path answered with an **empty body**: the delegate cannot render `ApiError` (above). The
+probes were temporary (not committed).
 
 ## Layout
 
@@ -207,9 +207,11 @@ design below is settled.
 
 1. Implement both delegates in `service/src/main/java/…` (hand-written, survives regeneration) —
    start with `registerJobRun` + `claimJobRun`, and add the `@RestControllerAdvice` that renders
-   `ApiError`.
+   `ApiError`. `registerJobRun` persists only (no Jira call, `200`, `PENDING`/`QUEUED`); the Jira
+   collection is a scheduled job that moves `PENDING` → `QUEUED`.
 2. Add `spring-boot-starter-jdbc` + PostgreSQL driver to `service`, the `jobs` table (Flyway or plain
-   SQL), the claim query, lease and reaper (`docs/postgres-job-queue.md` §1–§3, §7).
+   SQL), the claim query (**excluding `PENDING` runs**), lease and reaper
+   (`docs/postgres-job-queue.md` §1–§3, §7).
 3. Generate the client for `agent` from the same YAML (openapi-generator client generator) and add
    the long-poll loop (`docs/postgres-job-queue.md` §8).
 4. Jira push via transactional outbox, and enforce the role model (`docs/service-api-sequences.md`

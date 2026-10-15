@@ -28,6 +28,11 @@
              swagger-api 2.2.55, the same swagger-core version as the property above, so the two
              do not disagree. -->
         <springdoc.version>3.1.1</springdoc.version>
+
+        <!-- Spring Boot's BOM does not manage Testcontainers either (verified: the artifact is not in
+             spring-boot-dependencies, and the build fails with "dependencies.dependency.version is
+             missing" without this property). 1.21.3 is the current release line. -->
+        <testcontainers.version>1.21.3</testcontainers.version>
     </properties>
 
     <dependencies>
@@ -86,6 +91,32 @@
         <dependency>
             <groupId>ch.qos.logback</groupId>
             <artifactId>logback-classic</artifactId>
+        </dependency>
+
+        <!-- PostgreSQL JDBC driver. Runtime scope on purpose: the hand-written repository only
+             touches javax.sql.DataSource, so nothing in main/ or test/ compiles against driver
+             classes — but Maven's test classpath includes runtime scope, so the integration tests
+             reach the driver through DriverManager without a compile-time dependency. -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- Testcontainers: the integration tests (*IT) start their own PostgreSQL 16 when a Docker
+             daemon is available, and fall back to an external database when one is configured
+             (docs/test-execution.md). Versions come from Spring Boot's BOM (testcontainers-bom). -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>${testcontainers.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${testcontainers.version}</version>
+            <scope>test</scope>
         </dependency>
 </dependencies>
 
@@ -154,6 +185,45 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+
+            <!--
+                Unit tests only. Integration tests are named *IT and belong to failsafe below, so
+                `mvn test` never needs a database — note that surefire's default include pattern
+                (`**/Test*.java`) would otherwise pick up names like TestcontainersPostgresIT.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>**/*IT.java</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+
+            <!--
+                Integration tests: *IT runs in the `verify` phase, so `./mvnw verify` is the single
+                command that runs everything — unit tests (surefire) and the tests that need a real
+                PostgreSQL (failsafe). *IT, not *Test, is what keeps a database requirement out of
+                `mvn test`.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <configuration>
+                    <includes>
+                        <include>**/*IT.java</include>
+                    </includes>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

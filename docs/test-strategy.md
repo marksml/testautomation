@@ -41,12 +41,15 @@ Contrast, same machine, real PostgreSQL:
 1. **No H2 anywhere near the queue.** Not for the repository layer, not for the claim query, not for
    migrations. The DDL is PostgreSQL DDL (partial index, `jsonb`, `text[]`, `gen_random_uuid()`), so
    an H2 schema would be a *second* schema that drifts from the real one.
-2. **Test the service logic against a port, not against a DB.** Keep the PostgreSQL dialect in one
-   narrow place — a repository/adapter interface whose claim method is the single statement from
-   `docs/postgres-job-queue.md` §1 — and unit-test the layers above it with a hand-written fake.
-   What remains to be proven for real is one JDBC method per queue operation.
+2. **Test the service logic against a port, not against a DB.** The PostgreSQL dialect sits in one
+   narrow place — `JobQueuePort` with `JdbcJobQueueRepository` behind it, whose claim method is the
+   single statement from `docs/postgres-job-queue.md` §1 — and the layers above it are unit-tested
+   against a hand-written fake (`InMemoryJobQueuePort`). What remains to be proven for real is one
+   JDBC method per queue operation.
 3. **Integration-test that adapter against real PostgreSQL**, including the concurrency case. This is
-   not a load test (out of scope for now); it is a correctness test with 2–8 claimers.
+   not a load test (out of scope for now); it is a correctness test with 2–8 claimers. Implemented as
+   `JobClaimConcurrencyIT`; `TestcontainersPostgresIT` additionally starts its own `postgres:16` where
+   Docker exists. How each of these is executed, and against which database: `test-execution.md`.
 4. Migrations (Flyway/plain SQL) must run against the same real PostgreSQL — they are the schema.
 
 ## 3. How to run against a real PostgreSQL
@@ -97,3 +100,9 @@ in where Docker is missing. The probes that produced §1 are in
 | 9 | `PENDING` runs are invisible to the claim query until the Jira collection has filled them in | claim query, real PG |
 
 Test 1 is the one that would have silently passed on H2.
+
+**Status (2026-10-15):** tests 1, 2 and 3 exist and run against real PostgreSQL
+(`JobClaimConcurrencyIT`); test 9 is asserted there too (a `PENDING` run stays unclaimable).
+Tests 4–8 need code that does not exist yet — lease expiry, the reaper, `DEAD`, the result path
+(`LEASE_LOST` / `ALREADY_TERMINAL`), the long-poll wake-up and the outbox worker. The in-memory port
+covers the decisions above the database (`JobClaimServiceTest`), never the atomic part.

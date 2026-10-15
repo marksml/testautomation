@@ -13,11 +13,22 @@ module (e.g. `shared/`) is the natural place for it.
 
 ## Status
 
-Skeleton plus a **generated REST layer** — ten endpoints exist and are routed (answering the
-generated delegates' default `501 Not Implemented`), but nothing is implemented behind them: no
-queue, no persistence, no Jira push, no agent client loop.
-Java 21, Maven, Spring Boot 4.1.1 (parent-managed dependency versions, no version numbers in the
-module POMs).
+**Queue foundations in place, HTTP API still unimplemented.** What exists today:
+
+- the **generated REST layer**: ten endpoints, routed, answering the generated delegates'
+  `501 Not Implemented` — `JobsApiDelegateImpl` logs each call and returns `501`;
+- the **queue schema**: `service/src/test/resources/local_pg_database_docker/schema.sql` (tables
+  `jobs`, `agents`, `jira_outbox` with their partial indexes), applied by the compose file beside it;
+  reasoning in `docs/postgres-job-queue.md` §10;
+- the **claim path behind a port**: `JobQueuePort` / `JdbcJobQueueRepository` (the single
+  `FOR UPDATE SKIP LOCKED` statement) plus `JobClaimService` for the decisions above it — deliberately
+  **not** wired into the delegate yet, so the application still starts without a database;
+- **tests**: unit tests against an in-memory port, and integration tests that run against real
+  PostgreSQL (Testcontainers where Docker exists) — `docs/test-execution.md`.
+
+Still missing: the registration path, the scheduled Jira collection and the result push, the
+lease/reaper, the result path, and the agent's claim-and-execute loop. Java 21, Maven, Spring Boot
+4.1.1 (parent-managed dependency versions, no version numbers in the module POMs).
 
 ## Requirements
 
@@ -43,6 +54,18 @@ java -jar agent/target/testautomation-agent-0.1.0-SNAPSHOT.jar
 Each module builds a repackaged, self-contained Spring Boot jar
 (`spring-boot-maven-plugin:repackage`). The agent still exits immediately (nothing non-daemon
 registered); the service starts Tomcat on port 8080.
+
+Integration tests need a real PostgreSQL. With a Docker daemon present, Testcontainers starts one and
+there is nothing to configure; without Docker, point the tests at an existing database:
+
+```bash
+./mvnw -pl service verify \
+    -DTA_IT_JDBC_URL=jdbc:postgresql://localhost:5433/testautomation \
+    -DTA_IT_JDBC_USER=testautomation -DTA_IT_JDBC_PASSWORD=testautomation
+```
+
+With neither, the integration tests **skip** with a message instead of failing, and `mvn test` needs
+no database at all. Details: `docs/test-execution.md`.
 
 ## REST layer: OpenAPI + delegate pattern
 
@@ -204,10 +227,13 @@ pom.xml                                       parent/aggregator (spring-boot-sta
 mvnw, mvnw.cmd, .mvn/wrapper/                 Maven wrapper (script-only, Maven 3.9.9)
 openapi/testautomation-service.yaml           HTTP contract, source of truth for generated code
 openapi/.openapi-generator-ignore             keeps the generator's sample app out of the output
-service/pom.xml                               testautomation-service module (web + OpenAPI generation)
-service/src/main/java/ch/mmar/testautomation/service/  hand-written code, incl. the delegate impls
+service/pom.xml                               testautomation-service module (web, generation, tests)
+service/src/main/java/.../service/api/        generated delegates live next door in target/; impl/ is hand-written
+service/src/main/java/.../service/queue/      JobQueuePort, JdbcJobQueueRepository, JobClaimService
 service/src/main/resources/application.yml
-service/src/test/java/...                     context-load smoke test
+service/src/test/java/.../service/queue/      queue tests: *Test (no database) and *IT (real PostgreSQL)
+service/src/test/resources/local_pg_database_docker/
+                                              schema.sql + docker-compose.yml — the canonical DDL
 agent/pom.xml                                 testautomation-agent module
 agent/src/main/java/ch/mmar/testautomation/agent/
 agent/src/main/resources/application.yml
@@ -216,23 +242,29 @@ docs/                                         design documentation
 ```
 
 Group id `ch.mmar.testautomation`; packages `ch.mmar.testautomation.service` and
-`ch.mmar.testautomation.agent`. Dependencies stay minimal: `service` has the web starter,
-validation and the Swagger annotations the generated code needs; `agent` is still just
-`spring-boot-starter` (no HTTP client yet). Persistence and queue dependencies are added once the
-design below is settled.
+`ch.mmar.testautomation.agent`. Dependencies stay minimal: `service` has the web starter, validation,
+the Swagger annotations, Testcontainers (test) and the PostgreSQL driver at **runtime** scope — but
+deliberately **not** `spring-boot-starter-jdbc`, because that switches on Boot's
+`DataSourceAutoConfiguration` and would make the application require a database it does not use yet.
+`agent` is still just `spring-boot-starter` (no HTTP client yet).
 
 ## Documentation
 
+- [`docs/test-execution.md`](docs/test-execution.md) — how the tests are executed: which command runs
+  which tests (`mvn test` = unit only, `./mvnw verify` = everything), the three ways a database is
+  provided (external URL, Testcontainers, skip), what each test class proves, the exact commands for
+  the Hermes VM (no Docker) and why the application still starts without a database.
 - [`docs/test-strategy.md`](docs/test-strategy.md) — where the queue may be tested and where it may
   not: H2 2.3.232 vs PostgreSQL 16.4 measured statement by statement (H2 *accepts* `SKIP LOCKED` and
   then locks the whole table), the port/adapter split that keeps the PG dialect in one place, how to
   get a real PostgreSQL (Testcontainers on Docker, local cluster on the Hermes VM) and the nine tests
-  that must exist before the queue counts as done.
+  that must exist before the queue counts as done — with the status of each.
 - [`docs/postgres-job-queue.md`](docs/postgres-job-queue.md) — how a PostgreSQL job queue works
   (`SELECT ... FOR UPDATE SKIP LOCKED`, job states, lease/reaper, `LISTEN/NOTIFY`), which ports and
   connections it needs (PostgreSQL 5432, PgBouncer 6432, pool sizing vs `max_connections`), how
   agents idle and learn about new work (§8: long polling, in-process wake-up), how it compares to a
-  dedicated message broker (§9: RabbitMQ/Kafka/SQS, dimension by dimension) and the decisions still
+  dedicated message broker (§9: RabbitMQ/Kafka/SQS, dimension by dimension), **the schema as built —
+  table by table with the reason for every constraint and index (§10)** and the decisions still
   open (§7).
 - [`docs/service-api-sequences.md`](docs/service-api-sequences.md) — who calls which endpoint and in
   which order (Jira client / desktop / curl registering runs, agents claiming and reporting), run
@@ -244,17 +276,22 @@ design below is settled.
 
 ## Next steps
 
-1. Implement both delegates in `service/src/main/java/…` (hand-written, survives regeneration) —
-   start with `registerJobRun` + `claimJobRun`, and add the `@RestControllerAdvice` that renders
-   `ApiError`. `registerJobRun` persists only (no Jira call, `200`, `PENDING`/`QUEUED`); the Jira
-   collection is a scheduled job that moves `PENDING` → `QUEUED`.
-2. Add `spring-boot-starter-jdbc` + PostgreSQL driver to `service`, the `jobs` table (Flyway or plain
-   SQL), the claim query (**excluding `PENDING` runs**), lease and reaper
-   (`docs/postgres-job-queue.md` §1–§3, §7).
-3. Generate the client for `agent` from the same YAML (openapi-generator client generator) and add
-   the long-poll loop (`docs/postgres-job-queue.md` §8).
-4. Jira push via transactional outbox, and enforce the role model (`docs/service-api-sequences.md`
-   §9, §10).
-5. Settle the open semantics in `docs/service-api-sequences.md` §12 (what determines the test to run,
-   registration retry safety, Jira representation of several runs, liveness, cancellation, releasing
-   a claimed run, per-run runtime limit, issue-key validation, error shape).
+1. **Wire the claim into the delegate.** `JobClaimService` exists and is tested; `claimJobRun` needs
+   a `DataSource` for the application (config in `application.yml` + a `@Bean`), the long-poll loop
+   around `claim?wait=`, and a `@RestControllerAdvice` that maps `AgentUnknownException` →
+   `409 AGENT_UNKNOWN` and renders `ApiError` (otherwise error payloads stay Boot's default shape).
+2. **Implement `registerJobRun`** — persist only: `200`, `PENDING` for a Jira-backed run, `QUEUED` for
+   an ad-hoc one, no Jira call, honoring the optional `Idempotency-Key`
+   (`docs/service-api-sequences.md` §2, §12.2). Then the integration-test fixtures can use the real
+   endpoint instead of SQL inserts.
+3. **The scheduled Jira collection** (moves `PENDING` → `QUEUED`, retry/backoff, and what happens to a
+   run whose details can never be collected — §12.9) and the **Jira push via the transactional
+   outbox** (§9), which finally uses the `jira_outbox` table.
+4. **Lease and reaper** — lease expiry → `QUEUED`, `attempt++`, `attempt > max_attempts` → `DEAD` with
+   the producer notification (`docs/postgres-job-queue.md` §1–§3, §7). Tests 4–8 of
+   `docs/test-strategy.md` §4 come with it.
+5. **Generate the client for `agent`** from the same YAML (openapi-generator client generator) and add
+   its long-poll claim/execute/report loop (`docs/postgres-job-queue.md` §8).
+6. Settle the remaining open semantics in `docs/service-api-sequences.md` §12 (registration retry
+   safety, Jira representation of several runs, liveness windows, cancellation, releasing a claimed
+   run, per-run runtime limit, incremental reads for the desktop) and enforce the role model (§10).

@@ -1,0 +1,36 @@
+# Local PostgreSQL 16 for development and integration tests.
+#
+#   start : docker compose -f service/src/test/resources/local_pg_database_docker/docker-compose.yml up -d
+#   stop  : docker compose -f service/src/test/resources/local_pg_database_docker/docker-compose.yml down
+#   reset : add -v to `down` to drop the data volume as well (then `up -d` re-applies schema.sql)
+#
+# schema.sql is mounted into /docker-entrypoint-initdb.d, so the entrypoint applies it on the first
+# start of an empty data volume. The integration tests do NOT need this container — they start their
+# own via Testcontainers when a Docker daemon is available, and otherwise accept an existing database
+# through -DTA_IT_JDBC_URL (docs/test-execution.md).
+#
+# Deliberately no `version:` key — obsolete in Compose v2 and warned about.
+services:
+  local-pg:
+    image: postgres:16
+    container_name: ta-local-pg
+    environment:
+      POSTGRES_DB: testautomation
+      POSTGRES_USER: testautomation
+      POSTGRES_PASSWORD: testautomation
+      # deterministic collation for the tests that compare ordered results
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      # 5433 on the host, so a PostgreSQL already installed on the default 5432 keeps working.
+      - "5433:5432"
+    volumes:
+      - ./schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - local-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U testautomation -d testautomation"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  local-pg-data:

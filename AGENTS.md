@@ -55,6 +55,9 @@ JDK directly, use `/opt/data/tools/jdk-21/bin/java`.
   Push directly to `main` after `./mvnw verify` passes.
 - **Do not pin dependency versions in `service/pom.xml` / `agent/pom.xml`** — versions come from
   the parent chain (Spring Boot BOM). Add a dependency without `<version>` and let the BOM decide.
+  Three documented exceptions exist because the BOM does not manage them: `swagger-annotations-jakarta`,
+  `springdoc-openapi-starter-webmvc-ui` and `org.testcontainers:*` (each has the reason as a comment in
+  the `<properties>` block of `service/pom.xml`).
 - **`spring-boot-maven-plugin` belongs in each module, not in the root POM** — declaring it in the
   aggregator makes the `repackage` goal run for the `pom`-packaging root and fail.
 - **Generated REST layer — never edit generated files.** `service/target/generated-sources/openapi`
@@ -83,9 +86,15 @@ JDK directly, use `/opt/data/tools/jdk-21/bin/java`.
   `UPDATE ... RETURNING`, partial indexes, `ON CONFLICT`, `LISTEN/NOTIFY`, `jsonb` and
   `pg_advisory_lock` are all rejected. A green H2 test proves nothing about the distribution — read
   `docs/test-strategy.md` (measured side by side against PostgreSQL 16.4) before adding DB tests.
-- **No database schema exists yet, on purpose.** Read `docs/postgres-job-queue.md` first; the open
-  decisions (§7) and the agent wake-up section (§8) define what gets built next. Do not invent a
-  schema or extra endpoints ahead of those decisions.
+- **The queue schema is `service/src/test/resources/local_pg_database_docker/schema.sql`** — canonical
+  DDL, applied by the compose file next to it, by the integration tests (after a schema reset) and one
+  day by the production migration. It contains no `DROP` and no PL/pgSQL on purpose: it must apply
+  identically through the compose entrypoint, Testcontainers and `psql`. Reasoning:
+  `docs/postgres-job-queue.md` §10.
+- **Unit tests are `*Test`, integration tests are `*IT`.** Surefire excludes `**/*IT.java`; failsafe
+  runs it in the `verify` phase. So `mvn test` never needs a database, `./mvnw verify` runs everything,
+  and the integration tests skip with an explanation when neither Docker nor `-DTA_IT_JDBC_URL=…` is
+  available (`docs/test-execution.md`). Never add a database-dependent `*Test`.
 - **Docker is not available on the Hermes VM** (no `/var/run/docker.sock`, no podman), so
   Testcontainers cannot run here — but a local PostgreSQL 16 sits at
   `/opt/data/tools/postgresql-16/bin` and can be started on a scratch data directory

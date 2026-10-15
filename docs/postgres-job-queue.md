@@ -300,7 +300,68 @@ delegate interface (`JobsApiDelegate`), and the queue table is owned by one modu
 broker would *not* solve here: pushing live test progress to a UI is a job for SSE/WebSocket from the
 service, not for a message broker.
 
-## 10. References
+## 10. The schema as built
+
+`service/src/test/resources/local_pg_database_docker/schema.sql` is the DDL — the single definition,
+applied by the compose file in the same folder, by the integration tests, and one day by the
+production migration (how and where it is applied: `test-execution.md` §6). The reasoning behind each
+decision, table by table:
+
+### `jobs` — one row per registered run
+
+| Decision | Why |
+|---|---|
+| `id` UUID = the `jobRunId` of the API | the wire identity is the row identity; no second key to keep in sync (`service-api-sequences.md` §2) |
+| `status` TEXT + CHECK against the API enum | the nine states of `JobRunStatus`, enforced in one place; TEXT instead of a PostgreSQL `ENUM` type so adding a state is a migration of one constraint, not of a type |
+| `PENDING` allowed only for `source = 'JIRA'` | only a Jira-backed run waits for its details; an ad-hoc run is `QUEUED` immediately |
+| the claim query filters `status = 'QUEUED'` | a `PENDING` run is therefore *structurally* unclaimable — an agent cannot pick up a run whose details have not arrived, and that needs no extra flag |
+| `source` is derived and CHECK-enforced from `issue_key` | §2.1 makes the distinction implicit in the payload; the database refuses to store a `source` that contradicts it |
+| `issue_key IS NOT NULL OR test_name IS NOT NULL` | the API answers `400` for a registration that names nothing; the database refuses it too, so a run that names nothing cannot appear through any other path |
+| `RUNNING` implies `agent_id IS NOT NULL AND lease_expires_at IS NOT NULL` | a `RUNNING` row without a holder is a bug that would otherwise have to be discovered by the reaper |
+| `agent_id` only while `status = 'RUNNING'` | `agent_id` always means "current lease holder", never "who ran it last"; the result carries the history |
+| FK to `agents` with `ON DELETE RESTRICT` | deleting an agent that holds a run would silently release the lease (and let a second agent execute the same run). Deregistration is an UPDATE (`deregistered_at`), not a delete |
+| `parameters` / `result` as JSONB | key/value inputs and the result payload incl. in-band artifacts, without a table per field while the shapes are still moving |
+| `attempt` / `max_attempts` | `attempt` increments on every claim; `attempt > max_attempts` is what the reaper turns into `DEAD` (`service-api-sequences.md` §5) |
+| `idempotency_key` + partial unique index | optional, for producers that retry a registration they never saw answered (§12.2); `NULL` rows are exempt, so the default remains "every registration is a run" |
+| `updated_at`, maintained by the application | the desktop polls; incremental reads (§12.12) need a change timestamp. No trigger on purpose: no PL/pgSQL in this DDL, so the file stays portable and splittable for Testcontainers and psql |
+
+### Indexes — each one exists for a query that exists
+
+| Index | Serves |
+|---|---|
+| `idx_jobs_claimable ON (priority DESC, created_at ASC) WHERE status = 'QUEUED'` | the claim: same column order as the `ORDER BY`, partial so it holds only claimable rows and stays small as history grows |
+| `idx_jobs_lease_expiry ON (lease_expires_at) WHERE status = 'RUNNING'` | the reaper's "whose lease has run out" |
+| `idx_jobs_agent_running ON (agent_id) WHERE status = 'RUNNING'` | the `maxJobs` count per agent |
+| `idx_jobs_issue_key ON (issue_key, created_at DESC) WHERE issue_key IS NOT NULL` | `GET /api/v1/jobs?issueKey=…` ("what happened with TEST-4711?") |
+| `idx_jobs_status_created`, `idx_jobs_updated_at` | list filters and the incremental read path |
+| `uq_jobs_idempotency_key` (partial unique) | one run per repeated registration attempt |
+
+### `agents` — the inventory
+
+`capabilities TEXT[]` is matched with `<@` inside the claim (the run's requirements must be a subset of
+the agent's), so capability matching costs nothing extra in the query. `labels JSONB` for free-form
+attributes (environment, host). Liveness is **not** a column: `last_seen_at` is refreshed by every
+claim/lease/result call and `deregistered_at` is set by `DELETE /agents/{agentId}`; `ACTIVE`/`STALE`/
+`OFFLINE` is derived in code, because a stored status would be a second truth that can go stale.
+
+### `jira_outbox` — the transactional outbox
+
+The status change and the outbox row are written in **one transaction**, which is the whole point
+(§9): a result can never be stored without its Jira notification being scheduled, and Jira being down
+can never lose a result. The worker's only query — unsent rows that are due — has its own partial
+index. Ad-hoc runs never get a row here; they never reach Jira (`service-api-sequences.md` §9).
+
+### Deliberately absent
+
+- **No trigger functions, no extensions, no `ENUM` types** — the file must apply identically through
+  the compose entrypoint, Testcontainers' script splitter and `psql`; `gen_random_uuid()` is built in
+  since PostgreSQL 13, so no `pgcrypto` either.
+- **No audit/history table yet** — `attempt` plus the terminal result cover the current need; a run
+  history is a separate decision.
+- **No partitioning** — history growth is not a problem at this scale; if it becomes one, partitioning
+  by `created_at` is the natural move and the indexes above are already partial.
+
+## 11. References
 
 **PostgreSQL (official)**
 - `SELECT` — locking clause / `SKIP LOCKED`: https://www.postgresql.org/docs/current/sql-select.html#SQL-FOR-UPDATE-SHARE

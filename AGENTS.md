@@ -44,8 +44,10 @@ java -jar agent/target/testautomation-agent-0.1.0-SNAPSHOT.jar
 
 Toolchain on the Hermes VM: JDK 21 at `/opt/data/tools/jdk-21`, Maven at
 `/opt/data/tools/maven-3.9.9` (both already on `PATH` for interactive shells). `./mvnw` also works
-with no local Maven. In a **non-interactive/background** shell `java` is not on `PATH` — call the
-absolute path `/opt/data/tools/jdk-21/bin/java` there.
+with no local Maven. In a **non-interactive/background** shell neither `PATH` nor `JAVA_HOME` is set:
+`java` is not found, and `./mvnw` aborts with "The JAVA_HOME environment variable is not defined
+correctly" before Maven even starts — export `JAVA_HOME=/opt/data/tools/jdk-21` and, when calling the
+JDK directly, use `/opt/data/tools/jdk-21/bin/java`.
 
 ## Critical Gotchas
 
@@ -68,17 +70,27 @@ absolute path `/opt/data/tools/jdk-21/bin/java` there.
 - **Error responses are still Spring Boot's default shape**, not the `ApiError` the spec declares.
   Worse, the delegate *cannot* produce that body itself: every method returns
   `ResponseEntity<JobRun>` (or another success model), so an error payload has to come from a thrown
-  exception handled by a `@RestControllerAdvice`. Verified: the delegated `400`/`503` paths answered
-  with an empty body.
+  exception handled by a `@RestControllerAdvice`. Verified: the delegated `400` path answered with an
+  empty body.
 - **Do not set `openapi.testautomationService.base-path`** — the spec paths already start with
   `/api/v1`, the property only adds a prefix.
 - **`openapi/.openapi-generator-ignore` is load-bearing.** It keeps the generator's sample app, its
   `application.properties` and two classes in the foreign `org.openapitools.configuration` package
   out of the output. Removing rules can break the build (the sample's `RFC3339DateFormat` does not
   compile against Spring Boot 4 / Jackson 3) or silently add a second Spring Boot main class.
+- **Never test the queue against H2.** H2 2.3.232 *accepts* `FOR UPDATE SKIP LOCKED` but locks at table
+  level: a concurrent claimer gets no rows at all (or a lock timeout without `SKIP LOCKED`), and
+  `UPDATE ... RETURNING`, partial indexes, `ON CONFLICT`, `LISTEN/NOTIFY`, `jsonb` and
+  `pg_advisory_lock` are all rejected. A green H2 test proves nothing about the distribution — read
+  `docs/test-strategy.md` (measured side by side against PostgreSQL 16.4) before adding DB tests.
 - **No database schema exists yet, on purpose.** Read `docs/postgres-job-queue.md` first; the open
   decisions (§7) and the agent wake-up section (§8) define what gets built next. Do not invent a
   schema or extra endpoints ahead of those decisions.
+- **Docker is not available on the Hermes VM** (no `/var/run/docker.sock`, no podman), so
+  Testcontainers cannot run here — but a local PostgreSQL 16 sits at
+  `/opt/data/tools/postgresql-16/bin` and can be started on a scratch data directory
+  (`docs/test-strategy.md` §3 has the commands). Keep the JDBC URL overridable so the same
+  integration tests run on a Docker dev machine and here.
 - The repository was renamed from `testautomation-service` to `testautomation` on GitHub. The old
   URL redirects, but always use the current one in remotes and docs. Local clone path:
   `/opt/data/projects/testautomation`.

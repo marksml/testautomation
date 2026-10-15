@@ -223,6 +223,11 @@ design below is settled.
 
 ## Documentation
 
+- [`docs/test-strategy.md`](docs/test-strategy.md) — where the queue may be tested and where it may
+  not: H2 2.3.232 vs PostgreSQL 16.4 measured statement by statement (H2 *accepts* `SKIP LOCKED` and
+  then locks the whole table), the port/adapter split that keeps the PG dialect in one place, how to
+  get a real PostgreSQL (Testcontainers on Docker, local cluster on the Hermes VM) and the nine tests
+  that must exist before the queue counts as done.
 - [`docs/postgres-job-queue.md`](docs/postgres-job-queue.md) — how a PostgreSQL job queue works
   (`SELECT ... FOR UPDATE SKIP LOCKED`, job states, lease/reaper, `LISTEN/NOTIFY`), which ports and
   connections it needs (PostgreSQL 5432, PgBouncer 6432, pool sizing vs `max_connections`), how

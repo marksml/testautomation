@@ -21,6 +21,7 @@ services:
       # deterministic collation for the tests that compare ordered results
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
     ports:
+      # Expose the database on a non-standard port to avoid conflicts with any local Postgres installations.
       - "5434:5432"
     volumes:
       - ./schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro

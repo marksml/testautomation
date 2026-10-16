@@ -42,6 +42,19 @@ Resolution order (first match wins), in `PostgresTestDatabase`:
 | Hermes VM (no Docker daemon) | same as above, against a locally started cluster — §4 |
 | Nothing available | integration tests skip; unit tests still run |
 
+Version: **Testcontainers 2.0.5**, taken from the Spring Boot BOM (`spring-boot-dependencies` 4.1.1
+imports `testcontainers-bom` 2.0.5) — the pom therefore carries no version. Use the 2.x coordinates
+(`testcontainers-postgresql`, `testcontainers-junit-jupiter`) and the 2.x packages
+(`org.testcontainers.postgresql.PostgreSQLContainer`); see `AGENTS.md`.
+
+**If the Docker daemon rejects the client with
+`400 client version 1.32 is too old. Minimum supported API version is 1.40`**, it is not the daemon
+and not the image: Testcontainers 1.x ships docker-java 3.4.2, which falls back to Docker API 1.32.
+2.0.5 ships docker-java 3.7.1 and negotiates with the daemon instead, which is why the project is on
+2.x. Should a future daemon still refuse the negotiated version, the escape hatch is a
+`src/test/resources/docker-java.properties` containing `api.version=1.44` (docker-java reads it from
+the classpath) — a pin, so treat it as temporary and delete it once the client negotiates again.
+
 The database is reset before each test: `DROP SCHEMA public CASCADE; CREATE SCHEMA public;` and then
 the canonical DDL is applied again. The DDL itself contains no `DROP` statement — it is production
 DDL and must never delete anything by being applied.

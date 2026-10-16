@@ -29,10 +29,6 @@
              do not disagree. -->
         <springdoc.version>3.1.1</springdoc.version>
 
-        <!-- Spring Boot's BOM does not manage Testcontainers either (verified: the artifact is not in
-             spring-boot-dependencies, and the build fails with "dependencies.dependency.version is
-             missing" without this property). 1.21.3 is the current release line. -->
-        <testcontainers.version>1.21.3</testcontainers.version>
     </properties>
 
     <dependencies>
@@ -105,17 +101,29 @@
 
         <!-- Testcontainers: the integration tests (*IT) start their own PostgreSQL 16 when a Docker
              daemon is available, and fall back to an external database when one is configured
-             (docs/test-execution.md). Versions come from Spring Boot's BOM (testcontainers-bom). -->
+             (docs/test-execution.md). No <version> here on purpose: spring-boot-dependencies 4.1.1
+             imports testcontainers-bom 2.0.5, the current release line.
+
+             Testcontainers 2 renamed the module artifacts (`postgresql` ->
+             `testcontainers-postgresql`, `junit-jupiter` -> `testcontainers-junit-jupiter`) and moved
+             the container classes into per-module packages
+             (`org.testcontainers.containers.PostgreSQLContainer` ->
+             `org.testcontainers.postgresql.PostgreSQLContainer`, now a raw type without the
+             self-referencing generic). Never mix 1.x and 2.x artifacts or imports on the classpath:
+             that fails at runtime with ClassNotFoundException.
+
+             The 1.x line cannot talk to a current Docker Engine: it bundles docker-java 3.4.2, which
+             falls back to Docker API 1.32, and Docker 29+ rejects anything below 1.40 with
+             `400 client version 1.32 is too old. Minimum supported API version is 1.40`. 2.0.5
+             bundles docker-java 3.7.1, which negotiates the API version with the daemon. -->
         <dependency>
             <groupId>org.testcontainers</groupId>
-            <artifactId>postgresql</artifactId>
-            <version>${testcontainers.version}</version>
+            <artifactId>testcontainers-postgresql</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
-            <artifactId>junit-jupiter</artifactId>
-            <version>${testcontainers.version}</version>
+            <artifactId>testcontainers-junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
 </dependencies>

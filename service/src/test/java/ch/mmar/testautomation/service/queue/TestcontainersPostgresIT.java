@@ -8,9 +8,9 @@ import java.util.UUID;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * The explicit Testcontainers test: it starts its <em>own</em> PostgreSQL 16 and asserts the two
@@ -30,8 +30,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 class TestcontainersPostgresIT {
 
     @Container
-    static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>(PostgresTestDatabase.POSTGRES_IMAGE);
+    static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer(PostgresTestDatabase.POSTGRES_IMAGE);
 
     @Test
     @DisplayName("postgres:16 in a container: the DDL from the compose folder applies and the queue runs")

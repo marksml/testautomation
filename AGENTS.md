@@ -55,9 +55,19 @@ JDK directly, use `/opt/data/tools/jdk-21/bin/java`.
   Push directly to `main` after `./mvnw verify` passes.
 - **Do not pin dependency versions in `service/pom.xml` / `agent/pom.xml`** — versions come from
   the parent chain (Spring Boot BOM). Add a dependency without `<version>` and let the BOM decide.
-  Three documented exceptions exist because the BOM does not manage them: `swagger-annotations-jakarta`,
-  `springdoc-openapi-starter-webmvc-ui` and `org.testcontainers:*` (each has the reason as a comment in
-  the `<properties>` block of `service/pom.xml`).
+  Two documented exceptions exist because the BOM does not manage them: `swagger-annotations-jakarta`
+  and `springdoc-openapi-starter-webmvc-ui` (each has the reason as a comment in the `<properties>`
+  block of `service/pom.xml`). Testcontainers is *not* an exception: `spring-boot-dependencies` 4.1.1
+  imports `testcontainers-bom` 2.0.5.
+- **Testcontainers is the 2.x line** — artifacts `org.testcontainers:testcontainers-postgresql` and
+  `:testcontainers-junit-jupiter` (2.x renamed every module artifact with a `testcontainers-` prefix),
+  classes in per-module packages (`org.testcontainers.postgresql.PostgreSQLContainer`, now a raw type
+  without the self-referencing generic); `org.testcontainers.DockerClientFactory` and
+  `org.testcontainers.junit.jupiter.{Testcontainers,Container}` kept their packages. **Never reintroduce
+  a 1.x artifact or the 1.x import** — besides the artifact renames, 1.x bundles docker-java 3.4.2,
+  which sends Docker API 1.32, and every daemon from Docker 29 on rejects that with
+  `400 client version 1.32 is too old. Minimum supported API version is 1.40`. 2.0.5 bundles
+  docker-java 3.7.1, which negotiates the version with the daemon.
 - **`spring-boot-maven-plugin` belongs in each module, not in the root POM** — declaring it in the
   aggregator makes the `repackage` goal run for the `pom`-packaging root and fail.
 - **Generated REST layer — never edit generated files.** `service/target/generated-sources/openapi`

@@ -11,7 +11,7 @@ import java.util.List;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.Assumptions;
 import org.testcontainers.DockerClientFactory;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
 /**
  * The real PostgreSQL an integration test runs against, resolved in this order:
@@ -41,11 +41,11 @@ public final class PostgresTestDatabase implements AutoCloseable {
     /** Image used for the container path; the compose file uses the same tag. */
     public static final String POSTGRES_IMAGE = "postgres:16";
 
-    private final PostgreSQLContainer<?> container;
+    private final PostgreSQLContainer container;
     private final DataSource dataSource;
     private final String description;
 
-    private PostgresTestDatabase(PostgreSQLContainer<?> container, DataSource dataSource, String description) {
+    private PostgresTestDatabase(PostgreSQLContainer container, DataSource dataSource, String description) {
         this.container = container;
         this.dataSource = dataSource;
         this.description = description;
@@ -63,7 +63,7 @@ public final class PostgresTestDatabase implements AutoCloseable {
         }
 
         if (DockerClientFactory.instance().isDockerAvailable()) {
-            PostgreSQLContainer<?> container = new PostgreSQLContainer<>(POSTGRES_IMAGE);
+            PostgreSQLContainer container = new PostgreSQLContainer(POSTGRES_IMAGE);
             container.start();
             PostgresTestDatabase database = new PostgresTestDatabase(container,
                     new SimpleDataSource(container.getJdbcUrl(), container.getUsername(), container.getPassword()),

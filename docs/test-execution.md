@@ -59,6 +59,31 @@ The database is reset before each test: `DROP SCHEMA public CASCADE; CREATE SCHE
 the canonical DDL is applied again. The DDL itself contains no `DROP` statement — it is production
 DDL and must never delete anything by being applied.
 
+### When the compose database refuses the password
+
+`POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` and everything in `/docker-entrypoint-initdb.d`
+are read by the image entrypoint **only while the data volume is empty**. An existing volume (from an
+earlier start, possibly with values that have been edited since) is never re-initialised: the
+container is healthy, and the client still gets
+`FATAL: password authentication failed for user "testautomation"`. Before suspecting the client, ask
+the container itself — its unix socket is `trust`, TCP is not:
+
+```bash
+F=service/src/test/resources/local_pg_database_docker/docker-compose.yml
+docker compose -f $F logs local-pg | head -40     # did the init run? (initdb, 01-schema.sql, "ready")
+docker compose -f $F exec local-pg psql -U testautomation -d postgres -c "\du"    # which roles exist
+docker compose -f $F exec local-pg psql \
+    "postgresql://testautomation:testautomation@127.0.0.1:5432/testautomation" -c "select current_user"
+```
+
+If the last command works, the container and those credentials are fine, and the problem is the client
+or the host port. If it fails the same way, the volume holds different credentials:
+`docker compose -f $F down -v` followed by `up -d` rebuilds it and re-applies `schema.sql`.
+
+Because a native PostgreSQL installation is common on a development machine, the host port is
+overridable for exactly that reason: `TA_PG_PORT=5434 docker compose -f $F up -d`, then connect to
+5434. Check who owns a port before blaming Postgres: `docker ps --filter publish=5433`.
+
 ## 3. What each test class covers
 
 | Class | Kind | Database | What it proves |
@@ -129,7 +154,7 @@ Consequently:
 
 | Consumer | How it gets the schema |
 |---|---|
-| Local development database | `docker-compose.yml` mounts it into `/docker-entrypoint-initdb.d` (first start of an empty volume) |
+| Local development database | `docker-compose.yml` mounts it into `/docker-entrypoint-initdb.d` (so the image entrypoint applies it on the first start of an empty volume — with `psql -v ON_ERROR_STOP=1`, which a virgin cluster was verified against: 3 tables, 11 indexes) |
 | Integration tests (Testcontainers and external alike) | the same file, read from the test classpath and applied after a schema reset |
 | The future production migration | will be made of this file (Flyway or plain SQL) — not yet wired |
 

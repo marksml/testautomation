@@ -21,8 +21,7 @@ services:
       # deterministic collation for the tests that compare ordered results
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
     ports:
-      # 5433 on the host, so a PostgreSQL already installed on the default 5432 keeps working.
-      - "5432:5432"
+      - "5434:5432"
     volumes:
       - ./schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
       - local-pg-data:/var/lib/postgresql/data

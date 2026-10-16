@@ -4,6 +4,25 @@
 #   stop  : docker compose -f service/src/test/resources/local_pg_database_docker/docker-compose.yml down
 #   reset : add -v to `down` to drop the data volume as well (then `up -d` re-applies schema.sql)
 #
+# Client settings:  jdbc:postgresql://localhost:5433/testautomation
+#                   user testautomation / password testautomation
+# Host port is 5433 so a PostgreSQL already installed on the default 5432 keeps working; override it
+# with TA_PG_PORT, e.g. `TA_PG_PORT=5434 docker compose ... up -d`.
+#
+# READ BEFORE CHANGING CREDENTIALS OR THE SCHEMA:
+# POSTGRES_DB / POSTGRES_USER / POSTGRES_PASSWORD and everything in /docker-entrypoint-initdb.d are
+# consumed by the image entrypoint ONLY while the data volume is empty. Once `local-pg-data` exists,
+# every later `up -d` ignores them: editing the password (or the DDL) in this file changes nothing in
+# the running database, and clients keep getting
+#   FATAL: password authentication failed for user "testautomation"
+# even though the container is healthy. Reset with `down -v` (drops the local data volume) and `up -d`.
+#
+# Is it the container that answers? Ask the container itself (the unix socket is trust, so no password
+# is needed for the first command, and the second one uses TCP with the credentials above):
+#   docker compose -f <this file> exec local-pg psql -U testautomation -d postgres -c "\du"
+#   docker compose -f <this file> exec local-pg psql \
+#       "postgresql://testautomation:testautomation@127.0.0.1:5432/testautomation" -c "select current_user"
+#
 # schema.sql is mounted into /docker-entrypoint-initdb.d, so the entrypoint applies it on the first
 # start of an empty data volume. The integration tests do NOT need this container — they start their
 # own via Testcontainers when a Docker daemon is available, and otherwise accept an existing database
@@ -21,8 +40,7 @@ services:
       # deterministic collation for the tests that compare ordered results
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
     ports:
-      # 5433 on the host, so a PostgreSQL already installed on the default 5432 keeps working.
-      - "5433:5432"
+      - "${TA_PG_PORT:-5433}:5432"
     volumes:
       - ./schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
       - local-pg-data:/var/lib/postgresql/data

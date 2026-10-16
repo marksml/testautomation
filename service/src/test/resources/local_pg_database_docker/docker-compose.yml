@@ -13,7 +13,7 @@
 services:
   local-pg:
     image: postgres:16
-    container_name: ta-local-pg
+    container_name: testautomation-database
     environment:
       POSTGRES_DB: testautomation
       POSTGRES_USER: testautomation
